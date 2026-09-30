@@ -374,21 +374,32 @@ struct DialogTransitionTests {
         #expect(recorder.firstCompletedValue(as: Bool.self) == true, "演出なしで報告された結果が配送される")
     }
 
-    @Test("[PB-TR-21] none 直後の閉鎖はオーバーレイの出現完了を待ってから退出する")
-    func PB_TR_21_noneWaitsForOverlayAppearance() async throws {
-        let harness = DialogTestHarness()
-        let recorder = DialogTestRecorder<Bool>()
-        let task = show(harness: harness, recorder: recorder, transition: DialogTransition.none())
-        try #require(await harness.waitForPresentedContainers(count: 1))
-        let container = try #require(harness.topmostContainer)
-        // 取り付け直後は .attached のことがある。覆いの出現 (.presenting) に入るまで待ってから閉じる
-        try #require(await waitUntil { container.containerState == .presenting })
+    @Test("[PB-TR-21] presentation 中の閉鎖は presentation の完了を待ってから退出する")
+    func PB_TR_21_dismissalDuringPresentationWaitsForCompletion() async throws {
+        // 出現の完了を門で押さえて「出現中」を確定させる。実時間の演出を頼りにすると、
+        // 実行機が遅い回に出現が先に終わり、報告の時点では既に表示中になっている。
+        let probe = DialogTransitionProbe()
+        let gate = DialogTransitionGate()
+        let stage = try await start(
+            transition: DialogTransition(
+                presentation: probe.gatedHook(.presentation, gate: gate),
+                dismissal: probe.immediateHook(.dismissal)
+            )
+        )
+        let container = try #require(stage.harness.topmostContainer)
+        try #require(await waitUntil { probe.hasEvent(.started(.presentation)) })
 
-        try await recorder.notifier(at: 0).complete(true)
-        #expect(container.containerState == .presenting, "覆いの出現中はまだ退出しない")
+        try await stage.notifier().complete(true)
+        #expect(container.containerState == .presenting, "出現中はまだ退出しない")
+        try? await Task.sleep(for: .milliseconds(150))
 
-        #expect(try await task.value == .completed(true))
+        #expect(container.containerState == .presenting, "門を開けるまで出現中のまま")
+        #expect(probe.callCount(.dismissal) == 0, "出現の完了前に dismissal フックは始まらない")
+
+        gate.open()
+        #expect(try await stage.task.value == .completed(true))
         #expect(container.containerState == .removed)
+        #expect(probe.callCount(.dismissal) == 1, "出現の完了後に dismissal フックが1回だけ走る")
     }
 
     @Test("[PB-TR-28] presentation 中の呼び出し元キャンセルは presentation をキャンセルして退出する")

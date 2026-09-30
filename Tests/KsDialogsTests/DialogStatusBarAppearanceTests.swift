@@ -4,7 +4,8 @@ import UIKit
 
 @testable import KsDialogs
 
-/// ダイアログの表示が、提示元の画面のステータスバー表示状態を変えないことを確かめる。
+/// ダイアログの表示が、提示元の画面のステータスバーの指定 (表示/非表示・アイコンの明暗) を
+/// 変えないことを確かめる (core/ADR-0040)。
 ///
 /// UIKit がステータスバーの見えを尋ねる相手は、全画面でない提示では
 /// `modalPresentationCapturesStatusBarAppearance` が true の提示先だけである。
@@ -28,7 +29,7 @@ struct DialogStatusBarAppearanceTests {
             contentView: DialogTestContentView(),
             resultChannel: DialogResultChannel()
         )
-        surface.present(container)
+        surface.present(container) { _ in }
 
         try #require(container.presentingViewController === presenter, "器が提示元の上に重なっている")
         // 器は提示元を置き換えないので、ステータスバーの見えを決める画面は変わらない。
@@ -40,6 +41,39 @@ struct DialogStatusBarAppearanceTests {
             "器はステータスバーの制御を奪わない"
         )
         #expect(container.childForStatusBarHidden == nil, "器は制御を委ねる先も持たない")
+    }
+
+    /// 判定するのはステータスバーの明暗を決める画面が提示元のままであることで、実際に描かれた文字色ではない。
+    /// 覆いがステータスバーの下を暗くしたときに OS が文字色を合わせるのは約束の外 (core/ADR-0040)。
+    @Test("[PB-SB-08] 明るい地向けの明暗を指定した画面でダイアログを出しても、明暗の指定は変わらない")
+    func PB_SB_08_dialogKeepsPresenterStatusBarStyle() throws {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let presenter = StatusBarDarkContentTestViewController()
+        window.rootViewController = presenter
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        try #require(presenter.preferredStatusBarStyle == .darkContent, "提示元がアイコンを明るい地向けに指定している前提")
+
+        let surface = UIKitDialogPresentationSurface(
+            keyWindowProvider: DialogTestKeyWindowProvider(keyWindow: window)
+        )
+        let container = DialogContainerViewController(
+            contentView: DialogTestContentView(),
+            resultChannel: DialogResultChannel()
+        )
+        surface.present(container) { _ in }
+
+        try #require(container.presentingViewController === presenter, "器が提示元の上に重なっている")
+        #expect(presenter.view.window === window)
+        #expect(container.modalPresentationStyle == .overFullScreen)
+        // overFullScreen は画面全体を覆うが UIKit の扱いでは全画面の提示ではないため、
+        // 器が制御を奪わない限り UIKit は明暗を提示元に尋ね続ける。
+        // 奪うと器の既定の明暗 (提示元の指定と無関係) が採用される。
+        #expect(
+            container.modalPresentationCapturesStatusBarAppearance == false,
+            "器はステータスバーの制御を奪わない"
+        )
+        #expect(container.childForStatusBarStyle == nil, "器は明暗を委ねる先も持たない")
     }
 }
 #endif

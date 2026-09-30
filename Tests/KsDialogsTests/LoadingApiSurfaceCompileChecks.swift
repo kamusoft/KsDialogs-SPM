@@ -27,6 +27,20 @@ final class ConsumerProgressLoadingViewModel: LoadingViewModel, LoadingProgressR
     }
 }
 
+/// 利用者の画面が持つ、UI スレッドに隔離された状態。処理の中から触る書き方の検証に使う。
+@MainActor
+final class ConsumerLoadingScreenState {
+    var status = ""
+}
+
+/// インライン factory が返す、利用者が書くのと同じ形のラベル。
+@MainActor
+private func consumerLabel(_ text: String) -> UILabel {
+    let label = UILabel()
+    label.text = text
+    return label
+}
+
 /// Loading の公開 API 形状のコンパイル検証。
 ///
 /// 命令形・スコープ形の呼び出し面、配置引数、スタイルの一括設定、UIKit / SwiftUI 両系統の登録、
@@ -224,6 +238,159 @@ enum LoadingApiSurfaceCompileChecks {
             configure: { viewModel in viewModel.onProgress(0.1) }
         ) { report in
             report(0.75)
+        }
+    }
+
+    // MARK: 処理が始まるスレッドの書き分け
+
+    /// 13 本のスコープ形の入口すべてで、その場で書いたクロージャから MainActor の状態に
+    /// `await` なしで触れられる (処理は UI スレッドで始まる)。
+    static func LD_HI_01_actionTouchesMainActorStateWithoutAwait(loading: any KsLoading) async throws {
+        let screen = ConsumerLoadingScreenState()
+        let placement = DialogPlacement(verticalAlignment: .end)
+
+        try await loading.start(message: "処理中", placement: placement) { _ in screen.status = "処理中" }
+        try await loading.start(ConsumerLoadingViewModel(title: "同期中"), placement: placement) { _ in
+            screen.status = "処理中"
+        }
+        try await loading.start(
+            ConsumerLoadingViewModel(title: "その場"),
+            placement: placement,
+            factory: { viewModel in consumerLabel(viewModel.title) }
+        ) { _ in screen.status = "処理中" }
+        try await loading.start(
+            ConsumerLoadingViewModel(title: "その場"),
+            placement: placement,
+            factory: { viewModel in Text(viewModel.title) }
+        ) { _ in screen.status = "処理中" }
+        try await loading.start(ConsumerLoadingViewModel.self, placement: placement, configure: nil) { _ in
+            screen.status = "処理中"
+        }
+        try await loading.start { _ in screen.status = "処理中" }
+        try await loading.start(message: "処理中") { _ in screen.status = "処理中" }
+        try await loading.start(ConsumerLoadingViewModel(title: "同期中")) { _ in screen.status = "処理中" }
+        try await loading.start(
+            ConsumerLoadingViewModel(title: "その場"),
+            factory: { viewModel in consumerLabel(viewModel.title) }
+        ) { _ in screen.status = "処理中" }
+        try await loading.start(
+            ConsumerLoadingViewModel(title: "その場"),
+            factory: { viewModel in Text(viewModel.title) }
+        ) { _ in screen.status = "処理中" }
+        try await loading.start(ConsumerLoadingViewModel.self) { _ in screen.status = "処理中" }
+        try await loading.start(
+            ConsumerProgressLoadingViewModel.self,
+            configure: { viewModel in viewModel.onProgress(0) }
+        ) { _ in screen.status = "処理中" }
+        try await loading.start(ConsumerLoadingViewModel.self, placement: placement) { _ in
+            screen.status = "処理中"
+        }
+    }
+
+    /// 13 本のスコープ形の入口すべてに、`@concurrent` を付けたクロージャを渡せる
+    /// (処理は UI スレッド外で始まる)。
+    static func LD_HI_01_actionRunsConcurrentlyWhenMarked(loading: any KsLoading) async throws {
+        let placement = DialogPlacement(verticalAlignment: .end)
+
+        try await loading.start(message: "処理中", placement: placement) { @concurrent report in report(1) }
+        try await loading.start(ConsumerLoadingViewModel(title: "同期中"), placement: placement) {
+            @concurrent report in report(1)
+        }
+        try await loading.start(
+            ConsumerLoadingViewModel(title: "その場"),
+            placement: placement,
+            factory: { viewModel in consumerLabel(viewModel.title) }
+        ) { @concurrent report in report(1) }
+        try await loading.start(
+            ConsumerLoadingViewModel(title: "その場"),
+            placement: placement,
+            factory: { viewModel in Text(viewModel.title) }
+        ) { @concurrent report in report(1) }
+        try await loading.start(ConsumerLoadingViewModel.self, placement: placement, configure: nil) {
+            @concurrent report in report(1)
+        }
+        try await loading.start { @concurrent report in report(1) }
+        try await loading.start(message: "処理中") { @concurrent report in report(1) }
+        try await loading.start(ConsumerLoadingViewModel(title: "同期中")) { @concurrent report in report(1) }
+        try await loading.start(
+            ConsumerLoadingViewModel(title: "その場"),
+            factory: { viewModel in consumerLabel(viewModel.title) }
+        ) { @concurrent report in report(1) }
+        try await loading.start(
+            ConsumerLoadingViewModel(title: "その場"),
+            factory: { viewModel in Text(viewModel.title) }
+        ) { @concurrent report in report(1) }
+        try await loading.start(ConsumerLoadingViewModel.self) { @concurrent report in report(1) }
+        try await loading.start(
+            ConsumerProgressLoadingViewModel.self,
+            configure: { viewModel in viewModel.onProgress(0) }
+        ) { @concurrent report in report(1) }
+        try await loading.start(ConsumerLoadingViewModel.self, placement: placement) {
+            @concurrent report in report(1)
+        }
+    }
+
+    /// 13 本のスコープ形の入口すべてで、処理の中から `await MainActor.run { … }` で
+    /// MainActor の状態に触る書き方もそのまま通る。
+    static func LD_HI_01_actionHopsExplicitlyWithMainActorRun(loading: any KsLoading) async throws {
+        let screen = ConsumerLoadingScreenState()
+        let placement = DialogPlacement(verticalAlignment: .end)
+
+        try await loading.start(message: "処理中", placement: placement) { _ in
+            await MainActor.run { screen.status = "処理中" }
+        }
+        try await loading.start(ConsumerLoadingViewModel(title: "同期中"), placement: placement) { _ in
+            await MainActor.run { screen.status = "処理中" }
+        }
+        try await loading.start(
+            ConsumerLoadingViewModel(title: "その場"),
+            placement: placement,
+            factory: { viewModel in consumerLabel(viewModel.title) }
+        ) { _ in
+            await MainActor.run { screen.status = "処理中" }
+        }
+        try await loading.start(
+            ConsumerLoadingViewModel(title: "その場"),
+            placement: placement,
+            factory: { viewModel in Text(viewModel.title) }
+        ) { _ in
+            await MainActor.run { screen.status = "処理中" }
+        }
+        try await loading.start(ConsumerLoadingViewModel.self, placement: placement, configure: nil) { _ in
+            await MainActor.run { screen.status = "処理中" }
+        }
+        try await loading.start { _ in
+            await MainActor.run { screen.status = "処理中" }
+        }
+        try await loading.start(message: "処理中") { _ in
+            await MainActor.run { screen.status = "処理中" }
+        }
+        try await loading.start(ConsumerLoadingViewModel(title: "同期中")) { _ in
+            await MainActor.run { screen.status = "処理中" }
+        }
+        try await loading.start(
+            ConsumerLoadingViewModel(title: "その場"),
+            factory: { viewModel in consumerLabel(viewModel.title) }
+        ) { _ in
+            await MainActor.run { screen.status = "処理中" }
+        }
+        try await loading.start(
+            ConsumerLoadingViewModel(title: "その場"),
+            factory: { viewModel in Text(viewModel.title) }
+        ) { _ in
+            await MainActor.run { screen.status = "処理中" }
+        }
+        try await loading.start(ConsumerLoadingViewModel.self) { _ in
+            await MainActor.run { screen.status = "処理中" }
+        }
+        try await loading.start(
+            ConsumerProgressLoadingViewModel.self,
+            configure: { viewModel in viewModel.onProgress(0) }
+        ) { _ in
+            await MainActor.run { screen.status = "処理中" }
+        }
+        try await loading.start(ConsumerLoadingViewModel.self, placement: placement) { _ in
+            await MainActor.run { screen.status = "処理中" }
         }
     }
 

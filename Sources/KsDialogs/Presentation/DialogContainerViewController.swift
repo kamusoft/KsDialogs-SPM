@@ -74,6 +74,11 @@ final class DialogContainerViewController: UIViewController {
     /// 器が今どの段階にいるか。
     private(set) var containerState: DialogContainerState = .created
 
+    /// 基準領域が表示中のページなのにページが得られず、可視領域へ落としたときの診断 (出した順)。
+    var currentPageDiagnostics: [String] {
+        layoutApplier.currentPageDiagnostics
+    }
+
     /// 進行中の演出を進める仕事。脱出口ではこれを取り消して先へ進む。
     private var lifecycleTask: Task<Void, Never>?
 

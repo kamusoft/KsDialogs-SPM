@@ -7,6 +7,26 @@ import UIKit
 final class DialogLayoutTestWindow: UIWindow {
     var simulatedSafeAreaInsets: UIEdgeInsets = .zero
 
+    /// root の view controller を載せて表示し、root の View のレイアウトまで済ませた window を作る。
+    /// 器を重ねる前にページの safe area を確定させておくために使う。
+    static func showing(
+        rootViewController: UIViewController,
+        screen: DialogLayoutCase.Size,
+        insets: DialogLayoutCase.Insets
+    ) -> DialogLayoutTestWindow {
+        let window = DialogLayoutTestWindow(frame: CGRect(x: 0, y: 0, width: screen.w, height: screen.h))
+        window.simulatedSafeAreaInsets = UIEdgeInsets(
+            top: insets.top,
+            left: insets.left,
+            bottom: insets.bottom,
+            right: insets.right
+        )
+        window.rootViewController = rootViewController
+        window.isHidden = false
+        window.layoutIfNeeded()
+        return window
+    }
+
     override var safeAreaInsets: UIEdgeInsets {
         simulatedSafeAreaInsets
     }

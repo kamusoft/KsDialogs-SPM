@@ -73,6 +73,7 @@ extension DialogLayoutCaseAttributes {
         switch name {
         case "window": return .window
         case "visibleArea": return .visibleArea
+        case "currentPage": return .currentPage
         default: return nil
         }
     }

@@ -1,7 +1,7 @@
 import Foundation
 
 /// 共通ケース表の1ケース。
-/// 「画面サイズ・システム領域の余白・内容サイズ・レイアウト属性 → 期待 rect」の組。
+/// 「画面サイズ・システム領域の余白・(表示中のページの矩形)・内容サイズ・レイアウト属性 → 期待 rect」の組。
 struct DialogLayoutCase: Decodable, Sendable, CustomStringConvertible {
     /// 幅と高さ。
     struct Size: Decodable, Sendable {
@@ -28,6 +28,8 @@ struct DialogLayoutCase: Decodable, Sendable, CustomStringConvertible {
     let id: String
     let screen: Size
     let insets: Insets
+    /// 表示中のページの View の矩形 (ウィンドウ座標)。基準領域が表示中のページのケースだけが持つ。
+    let pageArea: Rect?
     let contentSize: Size
     let attributes: DialogLayoutCaseAttributes
     let expected: Rect

@@ -27,7 +27,8 @@ struct LoadingLayoutCaseTableTests {
         let actual = LoadingLayoutMeasurement.measureContentFrame(
             contentView: contentView,
             screen: layoutCase.screen,
-            insets: layoutCase.insets
+            insets: layoutCase.insets,
+            pageArea: layoutCase.pageArea
         )
 
         let tolerance = DialogLayoutCaseLoader.table.tolerance

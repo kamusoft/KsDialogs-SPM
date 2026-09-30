@@ -14,11 +14,13 @@ enum LoadingLayoutMeasurement {
     ///   - showPlacement: 表示 API の引数で渡す配置。nil なら添付が使われる
     ///   - screen: window の大きさ
     ///   - insets: システム領域が占める4辺の余白
+    ///   - pageArea: 表示中のページの View の矩形。nil ならページを持たない画面にする
     static func layoutInWindow(
         contentView: UIView,
         showPlacement: DialogPlacement? = nil,
         screen: DialogLayoutCase.Size,
-        insets: DialogLayoutCase.Insets
+        insets: DialogLayoutCase.Insets,
+        pageArea: DialogLayoutCase.Rect? = nil
     ) -> (container: LoadingContainerViewController, window: DialogLayoutTestWindow) {
         let window = DialogLayoutTestWindow(
             frame: CGRect(x: 0, y: 0, width: screen.w, height: screen.h)
@@ -29,8 +31,19 @@ enum LoadingLayoutMeasurement {
             bottom: insets.bottom,
             right: insets.right
         )
-        window.rootViewController = UIViewController()
-        window.isHidden = false
+        if let pageArea {
+            // 器が載った瞬間の初回パスがページの safe area を読めるよう、先にページをレイアウトしておく。
+            window.rootViewController = DialogLayoutPageHostViewController(
+                pageArea: pageArea,
+                screen: screen,
+                insets: insets
+            )
+            window.isHidden = false
+            window.layoutIfNeeded()
+        } else {
+            window.rootViewController = UIViewController()
+            window.isHidden = false
+        }
 
         let container = LoadingContainerViewController(
             content: DialogContent(view: contentView),
@@ -46,13 +59,15 @@ enum LoadingLayoutMeasurement {
         contentView: UIView,
         showPlacement: DialogPlacement? = nil,
         screen: DialogLayoutCase.Size,
-        insets: DialogLayoutCase.Insets
+        insets: DialogLayoutCase.Insets,
+        pageArea: DialogLayoutCase.Rect? = nil
     ) -> CGRect {
         let stage = layoutInWindow(
             contentView: contentView,
             showPlacement: showPlacement,
             screen: screen,
-            insets: insets
+            insets: insets,
+            pageArea: pageArea
         )
         defer { stage.window.isHidden = true }
         return contentView.frame

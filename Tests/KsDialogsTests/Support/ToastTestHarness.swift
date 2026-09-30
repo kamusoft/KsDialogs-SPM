@@ -30,10 +30,12 @@ final class ToastTestHarness {
     ///   - screen: 取り付け先の寸法
     ///   - insets: システム領域が占める4辺の余白
     ///   - hasHost: false にすると取り付け先が存在しない状況になる
+    ///   - isAppInForeground: アプリが前面にいるか。取り付け先が無いとき、true なら前面の待ち、false なら背面になる
     init(
         screen: DialogLayoutCase.Size = ToastTestHarness.portraitScreen,
         insets: DialogLayoutCase.Insets = ToastTestHarness.portraitInsets,
-        hasHost: Bool = true
+        hasHost: Bool = true,
+        isAppInForeground: Bool = true
     ) {
         window = DialogLayoutTestWindow(frame: CGRect(x: 0, y: 0, width: screen.w, height: screen.h))
         window.simulatedSafeAreaInsets = UIEdgeInsets(
@@ -44,7 +46,7 @@ final class ToastTestHarness {
         )
         window.rootViewController = UIViewController()
         window.isHidden = false
-        surface = ToastTestPresentationSurface(hostView: hasHost ? window : nil)
+        surface = ToastTestPresentationSurface(hostView: hasHost ? window : nil, isAppInForeground: isAppInForeground)
         coordinator = ToastCoordinator(
             registry: registry,
             settings: ToastSettings(),

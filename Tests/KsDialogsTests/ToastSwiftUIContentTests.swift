@@ -8,7 +8,7 @@ import UIKit
 /// SwiftUI で書いたカスタム Toast が従来 View 系と同じに働くことを確かめる (core/ADR-0010・0011)。
 ///
 /// 中身を書く技術で観察可能な挙動 (表示・配置・消滅) は変わらない。
-@Suite("SwiftUI のカスタム Toast", .serialized)
+@Suite("SwiftUI のカスタム Toast", .serialized, .awaitsMainActorResponsive)
 @MainActor
 struct ToastSwiftUIContentTests {
     /// 両系統に同じ内容サイズを要求させ、位置とサイズの比較を成立させる。

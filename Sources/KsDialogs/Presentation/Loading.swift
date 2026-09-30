@@ -102,7 +102,7 @@ public final class Loading: KsLoading {
     public func start<T: Sendable>(
         message: String? = nil,
         placement: DialogPlacement? = nil,
-        _ action: @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
+        _ action: @MainActor @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
     ) async throws -> T {
         let token = try await coordinator.beginUse(.builtin, message: message, placement: placement)
         return try await runScope(token: token, action)
@@ -111,7 +111,7 @@ public final class Loading: KsLoading {
     public func start<ViewModel: LoadingViewModel, T: Sendable>(
         _ viewModel: ViewModel,
         placement: DialogPlacement? = nil,
-        _ action: @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
+        _ action: @MainActor @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
     ) async throws -> T {
         let token = try await coordinator.beginUse(
             .registered(viewModel: viewModel),
@@ -125,7 +125,7 @@ public final class Loading: KsLoading {
         _ viewModel: ViewModel,
         placement: DialogPlacement? = nil,
         factory: @escaping @MainActor @Sendable (ViewModel) throws -> UIView,
-        _ action: @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
+        _ action: @MainActor @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
     ) async throws -> T {
         let token = try await beginInlineUse(
             viewModel,
@@ -139,7 +139,7 @@ public final class Loading: KsLoading {
         _ viewModel: ViewModel,
         placement: DialogPlacement? = nil,
         @ViewBuilder factory: @escaping @MainActor @Sendable (ViewModel) throws -> Content,
-        _ action: @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
+        _ action: @MainActor @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
     ) async throws -> T {
         let token = try await beginInlineUse(
             viewModel,
@@ -153,7 +153,7 @@ public final class Loading: KsLoading {
         _ viewModelType: ViewModel.Type,
         placement: DialogPlacement? = nil,
         configure: (@MainActor @Sendable (ViewModel) async throws -> Void)? = nil,
-        _ action: @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
+        _ action: @MainActor @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
     ) async throws -> T {
         let token = try await beginTypedUse(viewModelType, placement: placement, configure: configure)
         return try await runScope(token: token, action)
@@ -223,9 +223,13 @@ public final class Loading: KsLoading {
     /// 合流1件を握ったまま処理を走らせ、成否によらず終了を1回だけ数える。
     ///
     /// 失敗を握り潰さずに伝播させつつ終了を数えるので、例外・キャンセルで表示が閉じ残らない。
+    ///
+    /// 処理の型は MainActor 隔離なので、ここから呼ぶだけで処理は UI スレッドで始まる (core/ADR-0037)。
+    /// 利用者が `@concurrent` を付けたクロージャや、自分の isolation を持つ関数を渡した場合は、
+    /// その isolation が優先される。どちらも言語の規則による移送で、ここに切り替えの処理は持たない。
     private func runScope<T: Sendable>(
         token: LoadingUseToken,
-        _ action: @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
+        _ action: @MainActor @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
     ) async throws -> T {
         let coordinator = coordinator
         let queue = LoadingReportQueue()

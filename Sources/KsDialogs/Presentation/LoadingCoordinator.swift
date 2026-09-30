@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import UIKit
+import os
 
 /// 表示に使う中身の指定。
 enum LoadingContentRequest {
@@ -9,8 +10,8 @@ enum LoadingContentRequest {
     case registered(viewModel: any LoadingViewModel)
     /// レジストリを経由せず、その場で渡された factory から作るカスタム Loading View。
     case inline(viewModel: any LoadingViewModel, factory: LoadingViewFactory)
-    /// 呼び出し時点でレジストリから解決済みの factory と、その場で生成された ViewModel から作る
-    /// カスタム Loading View (型指定 show / start。core/ADR-0035)。
+    /// 呼び出し時点でレジストリから解決済みの factory と ViewModel から作るカスタム Loading View
+    /// (型指定 show / start。core/ADR-0035。登録経路も開始の時点でこの形に解決してから控える)。
     ///
     /// 解決を呼び出し時点で終えているため、状態の正に届くまでの間に再登録が起きても
     /// 最初に取得した組で中身を作る。
@@ -48,8 +49,17 @@ final class LoadingCoordinator {
     /// 現在の世代に合流している利用の数。
     private var activeCount = 0
 
-    /// 表示中の器。取り付け先が無いときは表示が成立しないので nil のままになる。
+    /// 表示中の器。取り付け先が現れるまでは nil のままになる。
     private var container: LoadingContainerViewController?
+
+    /// 提示先が無いまま始まった表示の中身の指定。提示先が現れた時点でここから中身を作る。
+    private var pendingDisplay: LoadingPendingDisplay?
+
+    /// 提示先の出現を待つ間だけ張る、提示先の出現の合図の購読。
+    private var hostAppearanceRegistration: DialogHostAppearanceRegistration?
+
+    /// 表示にまつわる不具合を知らせる記録口。
+    private let warningLog: @MainActor @Sendable (String) -> Void
 
     /// 表示中の内蔵コンテンツ。カスタム View 表示中は nil。
     private var builtinContentView: LoadingDefaultContentView?
@@ -69,14 +79,30 @@ final class LoadingCoordinator {
     /// 進行中の撤去。新しい開始はこの完了を待ってから新世代として始まる。
     private var dismissalTask: Task<Void, Never>?
 
+    /// - Parameters:
+    ///   - warningLog: 警告の記録口。既定は OS のログへ警告として残す
     nonisolated init(
         registry: LoadingViewRegistry = .shared,
         settings: LoadingSettings = LoadingSettings(),
-        presentationSurface: any LoadingPresentationSurface = KeyWindowLoadingPresentationSurface()
+        presentationSurface: any LoadingPresentationSurface = KeyWindowLoadingPresentationSurface(),
+        warningLog: @escaping @MainActor @Sendable (String) -> Void = LoadingCoordinator.logWarning
     ) {
         self.registry = registry
         self.settings = settings
         self.presentationSurface = presentationSurface
+        self.warningLog = warningLog
+    }
+
+    isolated deinit {
+        hostAppearanceRegistration?.cancel()
+    }
+
+    /// OS のログの記録口。
+    private nonisolated static let logger = Logger(subsystem: "jp.kamusoft.ksdialogs", category: "loading")
+
+    /// 警告を OS のログへ残す既定の記録口。
+    nonisolated static func logWarning(_ message: String) {
+        logger.warning("\(message, privacy: .public)")
     }
 
     // MARK: - 観察 (テストと内部からの読み取り)
@@ -84,6 +110,11 @@ final class LoadingCoordinator {
     /// 器が取り付いているか。
     var isPresenting: Bool {
         container != nil && dismissalTask == nil
+    }
+
+    /// 提示先の出現を待っている表示があるか。
+    var isWaitingForHost: Bool {
+        pendingDisplay != nil
     }
 
     /// 出の演出と撤去が進行中か。
@@ -117,6 +148,10 @@ final class LoadingCoordinator {
     ///
     /// 出の演出の途中なら、その撤去の完了を待ってから新しい世代として始める。
     /// 構成ミス (未登録の ViewModel 型) はここで失敗するため、呼び出し元は処理を実行しない。
+    ///
+    /// 提示先があれば中身をここで作り、その失敗も開始の失敗になる。
+    /// 提示先が無ければ中身の指定だけを控えて提示先の出現を待つ (中身は現れた時点で作る)。
+    /// どちらの場合も View factory の解決はここで行うので、未登録は提示先の有無によらず開始の失敗になる。
     func beginUse(
         _ request: LoadingContentRequest,
         message: String?,
@@ -124,15 +159,24 @@ final class LoadingCoordinator {
     ) async throws -> LoadingUseToken {
         await waitForPendingDismissal()
         guard activeCount > 0 else {
-            // 新しい世代。ここで初めてコンテンツを解決するので、失敗は開始そのものの失敗になる。
+            // 新しい世代。構成ミスと、提示先があるときの中身の生成の失敗は、開始そのものの失敗になる。
             let style = settings.style
-            let resolved = try makeContent(for: request, style: style)
+            let resolvedRequest = try resolveFactoryIfNeeded(request)
+            let hostView = presentationSurface.hostView
+            var resolved: LoadingResolvedContent?
+            if hostView != nil {
+                resolved = try makeContent(for: resolvedRequest, style: style)
+            }
             generation += 1
             activeCount = 1
             displayedStyle = style
             latestMessage = message
             latestProgress = nil
-            startDisplay(resolved, placement: placement)
+            if let hostView, let resolved {
+                startDisplay(resolved, placement: placement, on: hostView)
+            } else {
+                waitForHost(LoadingPendingDisplay(request: resolvedRequest, placement: placement))
+            }
             return LoadingUseToken(generation: generation)
         }
         // 合流。コンテンツは最初の開始のものを維持するが、構成ミスは同じように弾く。
@@ -172,8 +216,10 @@ final class LoadingCoordinator {
     }
 
     /// 表示中のメッセージを更新する。合流には関与しない。
+    /// 提示先を待っている既定ローディングでも受け付け、表示の時点で反映する。
     func setMessage(_ message: String?) {
-        guard activeCount > 0, builtinContentView != nil else { return }
+        guard activeCount > 0,
+              builtinContentView != nil || pendingDisplay?.isBuiltin == true else { return }
         latestMessage = message
         refreshBuiltinText()
     }
@@ -191,18 +237,64 @@ final class LoadingCoordinator {
 
     // MARK: - 表示の出し入れ
 
-    /// 解決済みの中身から器を組み立てて取り付ける。
-    ///
-    /// 取り付け先が無いときは器を作らない。表示は成立しないが合流状態は成立し、
-    /// 呼び出し元の処理は通常どおり実行される (提示環境の不在は構成ミスではない)。
-    private func startDisplay(_ resolved: LoadingResolvedContent, placement: DialogPlacement?) {
+    /// 解決済みの中身から器を組み立てて取り付ける。器は取り付いた時点で入りの演出を始める。
+    private func startDisplay(
+        _ resolved: LoadingResolvedContent,
+        placement: DialogPlacement?,
+        on hostView: UIView
+    ) {
         builtinContentView = resolved.builtinContentView
         customViewModel = resolved.viewModel
         refreshBuiltinText()
-        guard let hostView = presentationSurface.hostView else { return }
         let container = LoadingContainerViewController(content: resolved.content, placement: placement)
         self.container = container
         container.attach(to: hostView)
+    }
+
+    // MARK: - 提示先の出現待ち
+
+    /// 提示先が無いまま始まった表示の中身の指定を控え、提示先の出現を待ち始める。
+    ///
+    /// 表示は成立していないが合流状態は成立しており、呼び出し元の処理は通常どおり実行される
+    /// (提示環境の不在は構成ミスではない)。ViewModel は進捗の受け口としてここで控えるので、
+    /// 表示の前に報告された進捗も ViewModel へ届く。
+    private func waitForHost(_ pending: LoadingPendingDisplay) {
+        pendingDisplay = pending
+        customViewModel = pending.viewModel
+        guard hostAppearanceRegistration == nil else { return }
+        hostAppearanceRegistration = presentationSurface.observeHostAppearance { [weak self] in
+            self?.presentPendingDisplayIfHostAppeared()
+        }
+    }
+
+    /// 提示先の出現の合図を受けて、待っている表示を出す。
+    ///
+    /// 合図は「現れたかもしれない」ことだけを知らせるので、提示先が無ければ待ち続ける。
+    /// 現れていれば中身を作り、入りの演出から表示する。ここは既に走り出した処理の途中なので、
+    /// 中身の生成の失敗は呼び出し元へ返さず、警告を残してこの表示を諦める
+    /// (合流状態は残り、処理はそのまま完了できる)。生成できない中身を次の合図で作り直しても
+    /// 同じ失敗を繰り返すため、待ちもここでやめる (core/ADR-0042)。
+    private func presentPendingDisplayIfHostAppeared() {
+        guard let pending = pendingDisplay, activeCount > 0, container == nil, dismissalTask == nil else {
+            return
+        }
+        guard let hostView = presentationSurface.hostView else { return }
+        stopWaitingForHost()
+        let resolved: LoadingResolvedContent
+        do {
+            resolved = try makeContent(for: pending.request, style: displayedStyle)
+        } catch {
+            warningLog("Could not create the Loading content. Nothing is presented: \(error.localizedDescription)")
+            return
+        }
+        startDisplay(resolved, placement: pending.placement, on: hostView)
+    }
+
+    /// 待っている表示の中身の指定を捨て、提示先の出現の合図の購読を解除する。
+    private func stopWaitingForHost() {
+        pendingDisplay = nil
+        hostAppearanceRegistration?.cancel()
+        hostAppearanceRegistration = nil
     }
 
     /// 出の演出と撤去を進め、完了してから戻る。
@@ -232,6 +324,7 @@ final class LoadingCoordinator {
     }
 
     private func clearDisplayState() {
+        stopWaitingForHost()
         builtinContentView = nil
         customViewModel = nil
         latestMessage = nil
@@ -253,6 +346,36 @@ final class LoadingCoordinator {
         let content: DialogContent
         let builtinContentView: LoadingDefaultContentView?
         let viewModel: AnyObject?
+    }
+
+    /// 提示先の出現を待つ表示の、中身の指定と配置。
+    private struct LoadingPendingDisplay {
+        /// View factory の解決を済ませた中身の指定。
+        let request: LoadingContentRequest
+        let placement: DialogPlacement?
+
+        /// 既定ローディングの表示か。
+        var isBuiltin: Bool {
+            if case .builtin = request { return true }
+            return false
+        }
+
+        /// カスタム View の ViewModel。既定ローディングでは nil。
+        var viewModel: AnyObject? {
+            switch request {
+            case .builtin:
+                nil
+            case .registered(let viewModel), .inline(let viewModel, _), .resolved(let viewModel, _):
+                viewModel
+            }
+        }
+    }
+
+    /// レジストリ経由の指定を、解決済みの factory を持つ指定に置き換える。
+    /// 未登録の ViewModel 型はここで失敗する。それ以外の指定はそのまま返す。
+    private func resolveFactoryIfNeeded(_ request: LoadingContentRequest) throws -> LoadingContentRequest {
+        guard case .registered(let viewModel) = request else { return request }
+        return .resolved(viewModel: viewModel, factory: try resolveFactory(for: viewModel))
     }
 
     private func makeContent(

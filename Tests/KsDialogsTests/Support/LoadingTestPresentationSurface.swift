@@ -12,5 +12,19 @@ final class LoadingTestPresentationSurface: LoadingPresentationSurface {
     init(hostView: UIView?) {
         self.hostView = hostView
     }
+
+    /// 提示先の出現の合図の発火口。`fireHostAppearance()` で合図を送る。
+    let hostAppearance = DialogTestHostAppearanceSignal()
+
+    func observeHostAppearance(
+        _ handler: @escaping DialogHostAppearanceHandler
+    ) -> DialogHostAppearanceRegistration {
+        hostAppearance.observe(handler)
+    }
+
+    /// 提示先の出現の合図を送る (本番の window の key 化・シーンのアクティブ化に対応する)。
+    func fireHostAppearance() {
+        hostAppearance.fire()
+    }
 }
 #endif

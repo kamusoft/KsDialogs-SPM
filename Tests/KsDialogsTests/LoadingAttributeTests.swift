@@ -36,12 +36,29 @@ struct LoadingAttributeTests {
         let placedFrame = try #require(harness.contentView).frame
         await harness.loading.hide()
 
-        // 基準は可視領域 (上 59) から余白 24 を控除した有効領域の前端 + オフセット。
+        // 基準は可視領域 (上 59) の前端 + オフセット。余白は既定値の 0 なので控除しない。
         let tolerance = DialogLayoutCaseLoader.table.tolerance
-        #expect(abs(Double(placedFrame.minX) - (24 + 10)) <= tolerance, "実測 \(placedFrame)")
-        #expect(abs(Double(placedFrame.minY) - (59 + 24 + 20)) <= tolerance, "実測 \(placedFrame)")
+        #expect(abs(Double(placedFrame.minX) - (0 + 10)) <= tolerance, "実測 \(placedFrame)")
+        #expect(abs(Double(placedFrame.minY) - (59 + 20)) <= tolerance, "実測 \(placedFrame)")
         #expect(placedFrame.minX != centeredFrame.minX)
         #expect(placedFrame.minY != centeredFrame.minY)
+    }
+
+    @Test("余白を添付しない既定ローディングは末尾寄せで可視領域の下端に接する")
+    func builtinLoadingWithoutMarginTouchesVisibleBottomAtEnd() async throws {
+        // 余白の契約既定値は全辺 0 (core/ADR-0039)。一括設定の options は既定値のまま。
+        let harness = LoadingTestHarness()
+        defer { harness.tearDown() }
+
+        await harness.loading.show(
+            message: nil,
+            placement: DialogPlacement(verticalAlignment: .end, offsetY: 0)
+        )
+        let frame = try #require(harness.contentView).frame
+        await harness.loading.hide()
+
+        let tolerance = DialogLayoutCaseLoader.table.tolerance
+        #expect(abs(Double(frame.maxY) - (844.0 - 34)) <= tolerance, "実測 \(frame)")
     }
 
     @Test("[LD-AT-02] カスタム View の添付属性が Dialog と同じ優先順位で効く")
@@ -66,8 +83,9 @@ struct LoadingAttributeTests {
         let attachedFrame = try #require(harness.contentView).frame
         await harness.loading.hide()
 
-        #expect(abs(Double(attachedFrame.minX) - (24 + 30)) <= tolerance, "実測 \(attachedFrame)")
-        #expect(abs(Double(attachedFrame.minY) - (59 + 24)) <= tolerance, "実測 \(attachedFrame)")
+        // 余白は既定値の 0 なので、可視領域の前端 + 添付のオフセットに置かれる。
+        #expect(abs(Double(attachedFrame.minX) - (0 + 30)) <= tolerance, "実測 \(attachedFrame)")
+        #expect(abs(Double(attachedFrame.minY) - 59) <= tolerance, "実測 \(attachedFrame)")
 
         // 引数を渡すと添付はオブジェクトまるごと置換される (offsetX 30 も引き継がない)。
         try await harness.loading.show(
@@ -77,8 +95,9 @@ struct LoadingAttributeTests {
         let argumentFrame = try #require(harness.contentView).frame
         await harness.loading.hide()
 
-        let expectedRight = 390.0 - 24
-        let expectedBottom = 844.0 - 34 - 24
+        // 余白の既定値 0 で、右端と下端が可視領域の右端と下端に接する。
+        let expectedRight = 390.0
+        let expectedBottom = 844.0 - 34
         #expect(abs(Double(argumentFrame.maxX) - expectedRight) <= tolerance, "実測 \(argumentFrame)")
         #expect(abs(Double(argumentFrame.maxY) - expectedBottom) <= tolerance, "実測 \(argumentFrame)")
     }

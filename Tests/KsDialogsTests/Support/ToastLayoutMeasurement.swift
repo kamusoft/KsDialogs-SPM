@@ -15,12 +15,14 @@ enum ToastLayoutMeasurement {
     ///   - fallbackPlacement: show 引数も添付も無いときに採る配置
     ///   - screen: window の大きさ
     ///   - insets: システム領域が占める4辺の余白
+    ///   - pageArea: 表示中のページの View の矩形。nil ならページを持たない画面にする
     static func layoutInWindow(
         contentView: UIView,
         showPlacement: DialogPlacement? = nil,
         fallbackPlacement: DialogPlacement = ToastPlacementDefault.placement,
         screen: DialogLayoutCase.Size,
-        insets: DialogLayoutCase.Insets
+        insets: DialogLayoutCase.Insets,
+        pageArea: DialogLayoutCase.Rect? = nil
     ) -> (container: ToastContainerViewController, window: DialogLayoutTestWindow) {
         let window = DialogLayoutTestWindow(
             frame: CGRect(x: 0, y: 0, width: screen.w, height: screen.h)
@@ -31,8 +33,19 @@ enum ToastLayoutMeasurement {
             bottom: insets.bottom,
             right: insets.right
         )
-        window.rootViewController = UIViewController()
-        window.isHidden = false
+        if let pageArea {
+            // 器が載った瞬間の初回パスがページの safe area を読めるよう、先にページをレイアウトしておく。
+            window.rootViewController = DialogLayoutPageHostViewController(
+                pageArea: pageArea,
+                screen: screen,
+                insets: insets
+            )
+            window.isHidden = false
+            window.layoutIfNeeded()
+        } else {
+            window.rootViewController = UIViewController()
+            window.isHidden = false
+        }
 
         let container = ToastContainerViewController(
             content: DialogContent(view: contentView),
@@ -49,14 +62,16 @@ enum ToastLayoutMeasurement {
         showPlacement: DialogPlacement? = nil,
         fallbackPlacement: DialogPlacement = ToastPlacementDefault.placement,
         screen: DialogLayoutCase.Size,
-        insets: DialogLayoutCase.Insets
+        insets: DialogLayoutCase.Insets,
+        pageArea: DialogLayoutCase.Rect? = nil
     ) -> CGRect {
         let stage = layoutInWindow(
             contentView: contentView,
             showPlacement: showPlacement,
             fallbackPlacement: fallbackPlacement,
             screen: screen,
-            insets: insets
+            insets: insets,
+            pageArea: pageArea
         )
         defer { stage.window.isHidden = true }
         return contentView.frame

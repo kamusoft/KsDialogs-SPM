@@ -5,7 +5,7 @@ import Foundation
 /// 利用者の操作結果ではなくプログラミングエラーなので、cancelled に化けさせずに throw する。
 /// 型消去輸送のために内部で使う印はこの面に出さない。
 ///
-/// この判別は「共有 VM の紐付けと結果型の食い違い」だけを表す。ダイアログを提示できないなど、
+/// この判別は「共有 VM の紐付けと結果型の食い違い」だけを表す。View factory が型を受け取れないなど、
 /// 共有コード経路に固有でない失敗は `DialogError` のまま throw されるため、利用者は必要に応じて
 /// そちらも捕まえる。判別の集合は利用者の網羅的な `switch` を左右するので、失敗の種類が増えても
 /// この面は広げない。
@@ -27,11 +27,11 @@ extension KsDialogsKmpError {
             KsDialogsKmpError.notRegistered(viewModelType: viewModelType)
         case .resultTypeMismatch(let expected, let actual):
             KsDialogsKmpError.resultTypeMismatch(expected: expected, actual: actual)
-        case .presentationHostUnavailable, .viewFactoryTypeMismatch,
-             .viewModelFactoryNotRegistered, .viewModelFactoryTypeMismatch,
-             .viewModelAlreadyShowing, .none:
-            // 失敗の理由そのものを渡す。理由が欠けている結果は、提示できなかった失敗として扱う。
-            error ?? DialogError.presentationHostUnavailable
+        case .viewFactoryTypeMismatch, .viewModelFactoryNotRegistered,
+             .viewModelFactoryTypeMismatch, .viewModelAlreadyShowing, .none:
+            // 失敗の理由そのものを渡す。互換面は失敗の判別に必ず理由を添えるが、理由が欠けていても
+            // 別の失敗を名乗らせないよう、理由が欠けていること自体を表す失敗にする。
+            error ?? KsDialogsKmpMissingFailureReason()
         }
     }
 }

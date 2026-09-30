@@ -14,21 +14,74 @@ enum DialogLayoutMeasurement {
     ///   - showPlacement: show の引数で渡す配置。nil なら添付が使われる
     ///   - screen: window の大きさ
     ///   - insets: システム領域が占める4辺の余白
+    ///   - pageArea: 表示中のページの View の矩形。nil ならページを持たない画面にする
     ///   - resultChannel: 器が結果を確定させる口 (外側タップの結果を観察するときに渡す)
     static func layoutInWindow(
         contentView: UIView,
         showPlacement: DialogPlacement? = nil,
         screen: DialogLayoutCase.Size,
         insets: DialogLayoutCase.Insets,
+        pageArea: DialogLayoutCase.Rect? = nil,
         resultChannel: DialogResultChannel = DialogResultChannel()
     ) -> (container: DialogContainerViewController, window: UIWindow) {
-        layoutInWindow(
+        if let pageArea {
+            return layoutOverPage(
+                content: DialogContent(view: contentView),
+                showPlacement: showPlacement,
+                screen: screen,
+                insets: insets,
+                pageArea: pageArea,
+                resultChannel: resultChannel
+            )
+        }
+        return layoutInWindow(
             content: DialogContent(view: contentView),
             showPlacement: showPlacement,
             screen: screen,
             insets: insets,
             resultChannel: resultChannel
         )
+    }
+
+    /// 表示中のページを root に持つ window へ器を重ねる。
+    ///
+    /// ページは safe area が `pageArea` とシステム領域の内側になる root の view controller で再現し、
+    /// 器はその上に重ねる。シーンを持たないテストランナーでは present の遷移が完走せず器の View が
+    /// window に載らないため、Loading / Toast の器と同じく window へ直接重ねる。
+    /// ページを探す既定の取得元は root から辿るので、提示の連なりに載せなくても同じページに届く。
+    static func layoutOverPage(
+        content: DialogContent,
+        showPlacement: DialogPlacement? = nil,
+        screen: DialogLayoutCase.Size,
+        insets: DialogLayoutCase.Insets,
+        pageArea: DialogLayoutCase.Rect,
+        resultChannel: DialogResultChannel = DialogResultChannel()
+    ) -> (container: DialogContainerViewController, window: UIWindow) {
+        let window = DialogLayoutTestWindow.showing(
+            rootViewController: DialogLayoutPageHostViewController(
+                pageArea: pageArea,
+                screen: screen,
+                insets: insets
+            ),
+            screen: screen,
+            insets: insets
+        )
+        let container = DialogContainerViewController(
+            content: content,
+            resultChannel: resultChannel,
+            placement: showPlacement
+        )
+        attach(container, to: window)
+        return (container, window)
+    }
+
+    /// 器を window へ直接重ね、載った時点の初回レイアウトパスまで進める。
+    /// 載る前に器の矩形を確定させておく (順序を逆にすると寸法ゼロの状態で実効値が固定される)。
+    static func attach(_ container: DialogContainerViewController, to window: UIWindow) {
+        container.prepareForPresentation(inBounds: window.bounds)
+        container.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        window.addSubview(container.view)
+        window.layoutIfNeeded()
     }
 
     /// 内部表現 (SwiftUI のホストを伴う中身を含む) をそのまま器に載せて window へ出す。
@@ -78,13 +131,15 @@ enum DialogLayoutMeasurement {
         contentView: UIView,
         showPlacement: DialogPlacement? = nil,
         screen: DialogLayoutCase.Size,
-        insets: DialogLayoutCase.Insets
+        insets: DialogLayoutCase.Insets,
+        pageArea: DialogLayoutCase.Rect? = nil
     ) -> CGRect {
         let stage = layoutInWindow(
             contentView: contentView,
             showPlacement: showPlacement,
             screen: screen,
-            insets: insets
+            insets: insets,
+            pageArea: pageArea
         )
         defer { stage.window.isHidden = true }
         return contentView.frame

@@ -15,6 +15,7 @@ final class DialogResultChannel: @unchecked Sendable {
     private var pendingOutcome: DialogOutcome?
     private var handler: (@Sendable (DialogOutcome) -> Void)?
     private var callerCancellationHandler: (@Sendable () -> Void)?
+    private var settlementObserver: (@Sendable () -> Void)?
 
     /// 結果を確定させる。確定済みなら何もしない。
     /// - Parameters:
@@ -29,6 +30,8 @@ final class DialogResultChannel: @unchecked Sendable {
         isSettled = true
         settledOrigin = origin
         latchedOutcome = outcome
+        let observer = settlementObserver
+        settlementObserver = nil
         if let handler {
             self.handler = nil
             lock.unlock()
@@ -37,6 +40,30 @@ final class DialogResultChannel: @unchecked Sendable {
             pendingOutcome = outcome
             lock.unlock()
         }
+        observer?()
+    }
+
+    /// 結果が確定したことだけを一度知らせる観察者を登録する。登録時点で確定済みなら即座に呼ぶ。
+    ///
+    /// `onSettle` の受け取り手 (器) とは別の口で、確定した結果を横取りしない。
+    /// 器ができる前 (提示先を待っている間) に確定を知るために使う。観察者は 1 つだけで、
+    /// 登録し直すと前の観察者は呼ばれなくなる。
+    func observeSettlement(_ observer: @escaping @Sendable () -> Void) {
+        lock.lock()
+        guard !isSettled else {
+            lock.unlock()
+            observer()
+            return
+        }
+        settlementObserver = observer
+        lock.unlock()
+    }
+
+    /// 確定の観察者を外す。外したあとは確定しても呼ばれない。
+    func removeSettlementObserver() {
+        lock.lock()
+        settlementObserver = nil
+        lock.unlock()
     }
 
     /// 結果確定時に一度だけ呼ばれるハンドラを登録する。登録時点で確定済みなら即座に呼ぶ。

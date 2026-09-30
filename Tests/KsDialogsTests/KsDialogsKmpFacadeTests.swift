@@ -237,15 +237,125 @@ struct KsDialogsKmpFacadeTests {
         #expect(harness.presentedContainers.isEmpty)
     }
 
-    @Test("提示先が無いときの show は共通の提示先不在エラーがそのまま届く")
-    func showRejectsMissingPresentationHost() async throws {
+    @Test("提示先が無いときの show は失敗せずに待ち、打ち切ると cancelled で終わる")
+    func showWaitsForMissingPresentationHostUntilCancelled() async throws {
         let harness = DialogTestHarness(hasPresentationHost: false)
-        harness.dialogs.kmp.register(SharedTestDialogViewModel.self) { _, _ in DialogTestContentView() }
-
-        // 共有コード経路に固有でない失敗は、この面の判別を増やさずライブラリ共通の型で伝える。
-        await #expect(throws: DialogError.presentationHostUnavailable) {
-            try await harness.dialogs.kmp.show(SharedTestDialogViewModel(message: "確認"))
+        let supply = DialogTestCallCounter()
+        harness.dialogs.kmp.register(SharedTestDialogViewModel.self) { _, _ in
+            supply.increment()
+            return DialogTestContentView()
         }
+
+        let showTask = Task { try await harness.dialogs.kmp.show(SharedTestDialogViewModel(message: "確認")) }
+        try #require(
+            await DialogTestWaiting.waitUntil { harness.presentationSurface.hostWaitQueue.waitingCount == 1 },
+            "登録済みの共有 VM の show は、失敗せずに提示先を待つ"
+        )
+
+        showTask.cancel()
+
+        #expect(try await showTask.value == .cancelled, "待っている間の打ち切りは cancelled で終わる")
+        #expect(supply.count == 0, "一度も中身を作らない")
+        #expect(harness.presentationSurface.hostWaitQueue.waitingCount == 0)
+    }
+
+    /// 共有コードからの show に対応する経路へ、中身に ViewModel の message を識別子として付ける登録をする。
+    private static func registerIdentifiedContent(in harness: DialogTestHarness) {
+        harness.dialogs.kmp.register(SharedTestDialogViewModel.self) { viewModel, _ in
+            let view = DialogTestContentView()
+            view.accessibilityIdentifier = viewModel.message
+            return view
+        }
+    }
+
+    /// 下から順に並んだ、表示中のダイアログの中身の識別子 (ViewModel の message)。
+    private static func presentedMessages(in harness: DialogTestHarness) -> [String?] {
+        harness.presentedContainers.map { $0.contentView.accessibilityIdentifier }
+    }
+
+    @Test("[PB-HW-06] 共有コードから続けて呼んだ show は、呼び出しから戻った時点で呼んだ順に列に並ぶ")
+    func PB_HW_06_sharedCodeShowsQueueInCallOrderOnReturn() async throws {
+        let harness = DialogTestHarness(hasPresentationHost: false)
+        Self.registerIdentifiedContent(in: harness)
+        let face = sharedCodeFace(harness: harness)
+        let results = DialogInteropTestRecorder()
+
+        // UI スレッドから、間に待ち合わせを挟まずに A、B の順で呼ぶ。
+        let showA = face.show(SharedTestDialogViewModel(message: "A")) { results.record(result: $0) }
+        let showB = face.show(SharedTestDialogViewModel(message: "B")) { results.record(result: $0) }
+        #expect(
+            harness.presentationSurface.hostWaitQueue.waitingCount == 2,
+            "表示の処理が UI スレッドで始まるのを待たずに、呼び出しの時点で 2 件とも列に並んでいる"
+        )
+
+        harness.presentationSurface.isPresentationHostAvailable = true
+        harness.presentationSurface.fireHostAppearance()
+
+        try #require(await harness.waitForPresentedContainers(count: 2), "2 枚とも表示される")
+        #expect(Self.presentedMessages(in: harness) == ["A", "B"], "呼んだ順に表示され、B が A の手前に重なる")
+
+        showB.cancel()
+        showA.cancel()
+        try #require(await DialogTestWaiting.waitUntil { results.resultCount == 2 })
+        #expect(harness.presentationSurface.hostWaitQueue.waitingCount == 0)
+    }
+
+    @Test("共有コードの show も、提示先があって待っているものが無ければ前の提示の完了を待たずに表示する")
+    func sharedCodeShowWithHostAndEmptyQueuePresentsImmediately() async throws {
+        let harness = DialogTestHarness()
+        Self.registerIdentifiedContent(in: harness)
+        let face = sharedCodeFace(harness: harness)
+        let results = DialogInteropTestRecorder()
+        // 提示の完了を知らせない状態でも、列を通らない show は互いを待たない。
+        harness.presentationSurface.holdsPresentationCompletion = true
+
+        let showA = face.show(SharedTestDialogViewModel(message: "A")) { results.record(result: $0) }
+        let showB = face.show(SharedTestDialogViewModel(message: "B")) { results.record(result: $0) }
+
+        try #require(await harness.waitForPresentedContainers(count: 2), "A の提示の完了を待たずに B も表示される")
+        #expect(Self.presentedMessages(in: harness) == ["A", "B"])
+        #expect(harness.presentationSurface.hostWaitQueue.waitingCount == 0, "列には並ばない")
+
+        harness.presentationSurface.completeHeldPresentations()
+        showB.cancel()
+        showA.cancel()
+        try #require(await DialogTestWaiting.waitUntil { results.resultCount == 2 })
+    }
+
+    @Test("共有コードの show が列に着かずに失敗しても、後から呼んだ show は止まらない")
+    func sharedCodeShowFailingBeforeQueueDoesNotBlockLaterShow() async throws {
+        let harness = DialogTestHarness(hasPresentationHost: false)
+        Self.registerIdentifiedContent(in: harness)
+        let face = sharedCodeFace(harness: harness)
+        let failure = DialogInteropTestRecorder()
+        let results = DialogInteropTestRecorder()
+
+        // 未登録の ViewModel の show は、札を取ったあと列に着く前に失敗する。
+        face.show(UnregisteredTestDialogViewModel()) { failure.record(result: $0) }
+        let showA = face.show(SharedTestDialogViewModel(message: "A")) { results.record(result: $0) }
+
+        try #require(await DialogTestWaiting.waitUntil { failure.resultCount == 1 })
+        #expect(failure.firstResult?.kind == .error, "未登録は失敗として返る")
+        try #require(
+            await DialogTestWaiting.waitUntil { harness.presentationSurface.hostWaitQueue.waitingCount == 1 },
+            "失敗した show の札は手放され、A だけが待っている"
+        )
+
+        harness.presentationSurface.isPresentationHostAvailable = true
+        harness.presentationSurface.fireHostAppearance()
+        try #require(await harness.waitForPresentedContainers(count: 1), "A は失敗した show に止められずに表示される")
+        #expect(Self.presentedMessages(in: harness) == ["A"])
+
+        showA.cancel()
+        try #require(await DialogTestWaiting.waitUntil { results.resultCount == 1 })
+    }
+
+    @Test("理由の欠けた失敗は、提示先の不在ではなく理由が欠けていたことを表す失敗になる")
+    func missingFailureReasonIsReportedAsItself() {
+        let error = KsDialogsKmpError.publicError(from: nil)
+
+        #expect(error as? KsDialogsKmpMissingFailureReason == KsDialogsKmpMissingFailureReason())
+        #expect(error.localizedDescription == "The Dialog failed without a reported reason.")
     }
 
     @Test("型付き公開面の登録は iOS Native の登録と同じレジストリに載る")

@@ -13,7 +13,7 @@ struct DialogLayoutAttributeDefaultsTests {
         let placement = DialogPlacement()
 
         #expect(options.layoutArea == .visibleArea)
-        #expect(options.dialogMargin == DialogEdgeInsets(all: 24))
+        #expect(options.dialogMargin == DialogEdgeInsets(all: 0))
         #expect(options.proportionalWidth == -1)
         #expect(options.proportionalHeight == -1)
         #expect(options.overlayColor == UIColor(white: 0, alpha: 0.4))
@@ -58,7 +58,7 @@ struct DialogLayoutAttributeDefaultsTests {
         options.proportionalWidth = 0.5
 
         #expect(options.proportionalWidth == 0.5)
-        #expect(options.dialogMargin == DialogEdgeInsets(all: 24))
+        #expect(options.dialogMargin == DialogEdgeInsets(all: 0))
         #expect(options.layoutArea == .visibleArea)
         #expect(options.overlayColor == UIColor(white: 0, alpha: 0.4))
         #expect(options.isCanceledOnTouchOutside)

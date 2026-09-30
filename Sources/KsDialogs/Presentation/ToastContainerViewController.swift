@@ -154,6 +154,18 @@ final class ToastContainerViewController: UIViewController {
         view.removeFromSuperview()
     }
 
+    /// 出の演出を走らせずに、器を取り付け先から直ちに外す。
+    ///
+    /// 表示を捨てる経路で使う。進行中の撤去 (`dismiss()`) と重なっても、そちらの残りの処理は
+    /// 外し終えた器に対して何もしない。
+    func removeImmediately() {
+        isRemoved = true
+        presentationTask?.cancel()
+        presentationTask = nil
+        releaseContentHost()
+        view.removeFromSuperview()
+    }
+
     // MARK: - 実効値の固定
 
     /// 器が画面に載った直後に、その状態での初回レイアウトパスを走らせて実効値を固定する

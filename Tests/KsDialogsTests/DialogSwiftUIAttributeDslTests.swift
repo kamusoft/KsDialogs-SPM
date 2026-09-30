@@ -34,7 +34,8 @@ struct DialogSwiftUIAttributeDslTests {
         let actual = try await DialogSwiftUIMeasurement.measureContentFrame(
             content: content,
             screen: layoutCase.screen,
-            insets: layoutCase.insets
+            insets: layoutCase.insets,
+            pageArea: layoutCase.pageArea
         )
 
         let expected = layoutCase.expected

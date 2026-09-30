@@ -10,8 +10,16 @@ import UIKit
 /// 見えは OS 標準 Toast の慣習に寄せた「半透明ダークグレーのピル + 白い中央寄せテキスト」で、
 /// `ToastStyle` で設定できるのは地色・文字色・文字の大きさ・角丸半径だけである。
 /// 余白・最大幅・寄せ・行間は内蔵コンテンツ側の固定値として持つ。
+/// 器が基準 rect から控除する余白 (dialogMargin) も、利用者が渡す口を持たないため
+/// `attachedOptions` としてこの View 自身に添付する。
 @MainActor
 final class ToastDefaultContentView: UIView {
+    /// デフォルト View が自分の中身に添付する器メタ属性。
+    ///
+    /// 利用者はデフォルト View に余白を渡せないため、契約の既定値 (全辺 0) ではなく
+    /// ピル自身の性質として全辺 24 の余白を持つ。余白以外は契約の既定値のまま (core/ADR-0039)。
+    static let attachedOptions = DialogOptions(dialogMargin: DialogEdgeInsets(all: 24))
+
     /// ピルの上下の余白。
     private static let verticalPadding: CGFloat = 11
 
@@ -42,6 +50,10 @@ final class ToastDefaultContentView: UIView {
         self.message = message
         self.announcer = announcer
         super.init(frame: .zero)
+
+        // デフォルト View は自分の性質として余白を持つ。配置の供給とは別に読まれるので、
+        // show 引数・ToastStyle のアプリ既定配置・契約既定配置のどれで置かれても効く。
+        ksDialogOptions = Self.attachedOptions
 
         backgroundColor = style.backgroundColor
         layer.cornerRadius = CGFloat(style.cornerRadius)

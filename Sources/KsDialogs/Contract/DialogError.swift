@@ -5,8 +5,6 @@ import Foundation
 public enum DialogError: Error, Equatable, Sendable {
     /// ViewModel 型に対する View factory がレジストリに登録されていない。
     case viewFactoryNotRegistered(viewModelType: String)
-    /// アクティブな提示先の画面が存在しない。キューイングはせず即座に失敗する。
-    case presentationHostUnavailable
     /// 登録済み factory が ViewModel の実際の型を受け取れない (型消去輸送での不整合)。
     case viewFactoryTypeMismatch(viewModelType: String)
     /// 報告された結果値が ViewModel の宣言結果型へ復元できない (型消去輸送での不整合)。
@@ -26,8 +24,6 @@ extension DialogError: LocalizedError {
         switch self {
         case .viewFactoryNotRegistered(let viewModelType):
             "No View factory is registered for ViewModel type \(viewModelType)."
-        case .presentationHostUnavailable:
-            "No screen is available to present the Dialog."
         case .viewFactoryTypeMismatch(let viewModelType):
             "The registered View factory cannot accept ViewModel type \(viewModelType)."
         case .resultTypeMismatch(let expected, let actual):

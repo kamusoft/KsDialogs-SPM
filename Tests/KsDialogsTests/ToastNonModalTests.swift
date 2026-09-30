@@ -8,7 +8,7 @@ import UIKit
 ///
 /// Toast の面へのタッチは背後のページ要素へ素通しされ、Toast 自身はタップで消えない。
 /// カスタム View の中に対話可能な部品を置いても反応しない。
-@Suite("Toast の完全非対話と非モーダル", .serialized)
+@Suite("Toast の完全非対話と非モーダル", .serialized, .awaitsMainActorResponsive)
 @MainActor
 struct ToastNonModalTests {
     /// 素通しの観察中に期限が来ないだけの長さ。

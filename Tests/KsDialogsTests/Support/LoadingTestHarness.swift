@@ -17,6 +17,8 @@ final class LoadingTestHarness {
     let window: DialogLayoutTestWindow
     let registry = LoadingViewRegistry()
     let surface: LoadingTestPresentationSurface
+    /// 状態の正が残した警告。
+    let warnings: LoadingTestWarningRecorder
     let coordinator: LoadingCoordinator
     let loading: Loading
 
@@ -41,10 +43,13 @@ final class LoadingTestHarness {
         window.rootViewController = UIViewController()
         window.isHidden = false
         surface = LoadingTestPresentationSurface(hostView: hasHost ? window : nil)
+        let warnings = LoadingTestWarningRecorder()
+        self.warnings = warnings
         coordinator = LoadingCoordinator(
             registry: registry,
             settings: LoadingSettings(),
-            presentationSurface: surface
+            presentationSurface: surface,
+            warningLog: { message in warnings.record(message) }
         )
         loading = Loading(coordinator: coordinator)
     }

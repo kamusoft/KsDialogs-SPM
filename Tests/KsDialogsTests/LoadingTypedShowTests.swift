@@ -315,9 +315,9 @@ struct LoadingTypedShowTests {
         let typedFrame = try #require(harness.contentView).frame
         await harness.loading.hide()
 
-        // 基準は可視領域 (上 59) から余白 24 を控除した有効領域の前端 + オフセット。
-        #expect(abs(Double(typedFrame.minX) - (24 + 10)) <= tolerance, "実測 \(typedFrame)")
-        #expect(abs(Double(typedFrame.minY) - (59 + 24 + 20)) <= tolerance, "実測 \(typedFrame)")
+        // 基準は可視領域 (上 59) の前端 + オフセット。余白は既定値の 0 なので控除しない。
+        #expect(abs(Double(typedFrame.minX) - (0 + 10)) <= tolerance, "実測 \(typedFrame)")
+        #expect(abs(Double(typedFrame.minY) - (59 + 20)) <= tolerance, "実測 \(typedFrame)")
 
         // インスタンス渡し show と同じ位置になる。
         try await harness.loading.show(

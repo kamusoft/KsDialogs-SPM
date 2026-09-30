@@ -20,8 +20,9 @@ public protocol DialogViewModel: AnyObject, Sendable {
 public extension DialogViewModel {
     /// 表示中のこの ViewModel に紐付いた結果報告口 (core/ADR-0018)。
     ///
-    /// show が中身を生成する直前に紐付き、結果が呼び出し元へ渡る前に外れる。
-    /// したがって show の前と終わったあとは nil であり、表示中だけ値を返す。
+    /// show が表示できる画面を待つ前 (中身を生成する前) に紐付き、結果が呼び出し元へ渡る前に外れる。
+    /// したがって show の前と終わったあとは nil であり、表示中 (表示できる画面を待っている間を含む) だけ値を返す。
+    /// 画面を待っている間に報告した結果は、ダイアログを表示せずにそのまま show の結果になる。
     /// 型は ViewModel の宣言結果型に固定され、factory の引数で渡される報告口と同じ配送先を指す。
     ///
     ///     final class ConfirmViewModel: DialogViewModel {

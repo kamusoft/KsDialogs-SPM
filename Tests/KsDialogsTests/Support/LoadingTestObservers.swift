@@ -74,6 +74,23 @@ final class LoadingTypedShowRecorder {
     }
 }
 
+/// 別の仕事として投入した呼び出しが走り出したことを書き留める。
+///
+/// 仕事を作っただけでは、その中身が走り出したかは呼び出し側から分からない。
+/// 呼び出しの直前にここへ印を付けておくと、走り出した時点を待ち側から確かめられる。
+///
+/// 印が示すのは「その仕事が最初の中断点まで進んだ」ことに限る。印と目的の中断点の間に
+/// 実行機の乗り換えが挟まらない経路 — UI スレッド隔離の呼び出しだけを並べた仕事 — に置いたときだけ、
+/// 「その中断点で待ちに入った」ことの根拠として使える。
+@MainActor
+final class LoadingTestCallStartRecorder {
+    private(set) var hasStarted = false
+
+    func markStarted() {
+        hasStarted = true
+    }
+}
+
 /// 処理の走行中に器の状態を書き留める。
 @MainActor
 final class LoadingTestContainerObserver {

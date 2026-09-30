@@ -9,7 +9,7 @@ import UIKit
 /// 多重起動はすべて表示され、重なり順は起動順になる。各表示は自分の duration で独立に消え、
 /// 画面遷移・回転をまたいでも表示は続き、残り時間は巻き戻らない。
 /// Loading と同時に出たときは起動順によらず Loading が前面である。
-@Suite("Toast の多重表示と表示の継続", .serialized)
+@Suite("Toast の多重表示と表示の継続", .serialized, .awaitsMainActorResponsive)
 @MainActor
 struct ToastMultiDisplayTests {
     /// 観察の途中で期限が来ないだけの長さ。

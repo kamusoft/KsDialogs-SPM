@@ -9,7 +9,10 @@ import UIKit
 /// show は戻り値を持たず、消滅の契機は duration の経過だけである。
 /// 構成ミス (未登録の ViewModel 型) だけが呼び出し時点の失敗になり、
 /// 受理した後の失敗はその表示1枚の破棄に留まる。
-@Suite("Toast の公開面と fire-and-forget", .serialized)
+///
+/// 表示時間は、背面で受理した表示なら受理の時点から、前面にいるのに提示先が無い間 (前面の待ち) に
+/// 受理した表示なら提示先に載った時点か背面へ下がった時点から数える (core/ADR-0043)。
+@Suite("Toast の公開面と fire-and-forget", .serialized, .awaitsMainActorResponsive)
 @MainActor
 struct ToastContractTests {
     /// 表示が消える前後を見分けるために使う短い duration。
@@ -221,72 +224,278 @@ struct ToastContractTests {
         #expect(await harness.waitUntilPresenting(), "後続の show は正常に表示される")
     }
 
-    @Test("取り付け先が無い間は表示を保留し、現れたら表示する")
-    func pendingDisplayAttachesWhenHostAppears() async throws {
-        let harness = ToastTestHarness(hasHost: false)
-        defer { harness.tearDown() }
+    // MARK: - 提示先の出現待ち
 
-        harness.toast.show(message: "提示先を待つ", duration: Self.longDuration)
+    @Test("[TS-HW-01] 背面で受理された Toast は、提示先が現れた時点で表示され、受理時点から数えた duration で消える")
+    func TS_HW_01_backgroundAcceptedDisplayIsAttachedWhenHostAppears() async throws {
+        let harness = ToastTestHarness(hasHost: false, isAppInForeground: false)
+        defer { harness.tearDown() }
+        let recorder = ToastTypedShowRecorder()
+        let probe = DialogTransitionProbe()
+        let acceptedAt = ContinuousClock.now
+
+        // 出入りの演出を即座に終えるので、表示が消える時点がそのまま期限の到達になる。
+        try harness.toast.show(ConfigurableToastTestViewModel(), duration: Self.hostWaitDuration) { viewModel in
+            recorder.recordContent(title: viewModel.title)
+            let view = FixedContentSizeView(contentSize: CGSize(width: 200, height: 60))
+            view.ksDialogTransition = DialogTransition(
+                presentation: probe.immediateHook(.presentation),
+                dismissal: probe.immediateHook(.dismissal)
+            )
+            return view
+        }
 
         await harness.drainAcceptance()
         #expect(harness.displayCount == 1, "呼び出しは失敗せず、表示は保留される")
-        #expect(harness.containers.isEmpty, "取り付け先が無い間は器を作らない")
+        try await Task.sleep(for: Self.hostlessPeriod)
+        #expect(recorder.creationCount == 0, "提示先が無い間は View factory が呼ばれない")
+        #expect(harness.containers.isEmpty, "提示先が無い間は器を作らない")
 
-        harness.surface.hostView = harness.window
-        NotificationCenter.default.post(
-            name: UIWindow.didBecomeKeyNotification,
-            object: harness.window
-        )
+        harness.surface.returnHost(harness.window)
 
+        #expect(recorder.creationCount == 1, "提示先が現れた時点で中身が作られる")
         #expect(await harness.waitUntilPresenting(), "提示先の出現で表示される")
+        #expect(await harness.waitUntilEmpty(), "duration の到達で消える")
+        let elapsed = acceptedAt.duration(to: .now)
+        #expect(
+            elapsed < Self.hostlessPeriod + .milliseconds(Self.hostWaitDuration),
+            "計時は受理時点から数える (提示先が現れた時点から数え直さない): \(elapsed)"
+        )
+        #expect(probe.callCount(.presentation) == 1, "入りの演出から表示される")
     }
 
-    @Test("提示先が現れないまま期限が来た表示は表示されずに破棄される")
-    func pendingDisplayIsDiscardedWhenDeadlinePasses() async throws {
-        let harness = ToastTestHarness(hasHost: false)
+    @Test("[TS-HW-02] 提示先が現れないまま満了した Toast は、中身が作られずに破棄される")
+    func TS_HW_02_expiredPendingDisplayCreatesNothing() async throws {
+        // 背面で受理するので、提示先が無い間も期限へ向けて時間が進む。
+        let harness = ToastTestHarness(hasHost: false, isAppInForeground: false)
         defer { harness.tearDown() }
+        let recorder = ToastTypedShowRecorder()
+        let configureCounter = DialogTestCallCounter()
+        harness.registry.register(ConfigurableToastTestViewModel.self) {
+            let viewModel = ConfigurableToastTestViewModel()
+            recorder.recordCreation(viewModel)
+            return viewModel
+        }
+        harness.registry.register(ConfigurableToastTestViewModel.self) { viewModel in
+            recorder.recordContent(title: viewModel.title)
+            return FixedContentSizeView(contentSize: CGSize(width: 200, height: 60))
+        }
 
-        harness.toast.show(message: "提示先が現れない", duration: 200)
+        try harness.toast.show(ConfigurableToastTestViewModel.self, duration: 200) { _ in
+            configureCounter.increment()
+        }
 
-        #expect(await harness.waitUntilEmpty(), "計時は受理時点から消費されている")
+        await harness.drainAcceptance()
+        #expect(harness.displayCount == 1, "呼び出しは失敗せず、表示は保留される")
+        #expect(await harness.waitUntilEmpty(), "計時は受理時点から消費され、満了で表示リストから外れる")
         #expect(harness.containers.isEmpty, "一度も表示されない")
+        #expect(recorder.createdViewModels.isEmpty, "VM factory は呼ばれない")
+        #expect(configureCounter.count == 0, "configure は呼ばれない")
+        #expect(recorder.creationCount == 0, "View factory は呼ばれない")
+        #expect(harness.surface.hostAppearance.activeRegistrationCount == 0, "待ちの購読は解除される")
     }
 
-    @Test("期限を過ぎた保留表示は、取り付け先の復帰がタイマーより先でも表示されない")
-    func expiredPendingDisplayIsNotAttachedWhenHostReturnsFirst() async throws {
-        let harness = ToastTestHarness(hasHost: false)
+    @Test("[TS-HW-03] 期限を過ぎた保留表示は、提示先の出現が期限の処理より先でも表示されない")
+    func TS_HW_03_expiredPendingDisplayIsNotAttachedWhenHostAppearsFirst() async throws {
+        let harness = ToastTestHarness(hasHost: false, isAppInForeground: false)
         defer { harness.tearDown() }
+        let recorder = ToastTypedShowRecorder()
 
         harness.toast.show(message: "期限切れ", duration: 200)
+        try harness.toast.show(ConfigurableToastTestViewModel(), duration: 200) { viewModel in
+            recorder.recordContent(title: viewModel.title)
+            return FixedContentSizeView(contentSize: CGSize(width: 200, height: 60))
+        }
         await harness.drainAcceptance()
-        try #require(harness.displayCount == 1, "取り付け先が無いので表示は保留される")
+        try #require(harness.displayCount == 2, "取り付け先が無いので表示は保留される")
 
         Self.returnHostAfterDeadline(harness, waiting: 0.35)
 
         #expect(harness.containers.isEmpty, "期限に達した表示は器を取り付けない")
         #expect(harness.displayCount == 0, "その場で破棄される")
+        #expect(recorder.creationCount == 0, "中身も作られない")
         #expect(
             harness.announcer.announcedMessages.isEmpty,
             "表示されない Toast の文言が読み上げへ流れている"
         )
     }
 
-    /// 期限を越えてから、その場で取り付け先を戻す。
+    @Test("提示先を待っている間に View factory を登録し直しても、受理の時点の登録で表示される")
+    func pendingRegisteredDisplayUsesFactoryResolvedAtAcceptance() async throws {
+        let harness = ToastTestHarness(hasHost: false)
+        defer { harness.tearDown() }
+        let acceptedFactoryCalls = DialogTestCallCounter()
+        let reregisteredFactoryCalls = DialogTestCallCounter()
+        harness.registry.register(ToastTestViewModel.self) { _ in
+            acceptedFactoryCalls.increment()
+            return FixedContentSizeView(contentSize: CGSize(width: 200, height: 60))
+        }
+
+        try harness.toast.show(ToastTestViewModel(), duration: Self.hostWaitDuration)
+        await harness.drainAcceptance()
+        try #require(harness.displayCount == 1, "提示先が無いので表示は保留される")
+
+        // 受理の後、提示先が現れる前に同じ ViewModel 型の登録を置き換える。
+        harness.registry.register(ToastTestViewModel.self) { _ in
+            reregisteredFactoryCalls.increment()
+            return FixedContentSizeView(contentSize: CGSize(width: 200, height: 60))
+        }
+        harness.surface.hostView = harness.window
+        harness.surface.fireHostAppearance()
+
+        #expect(await harness.waitUntilPresenting(), "提示先の出現で表示される")
+        #expect(acceptedFactoryCalls.count == 1, "受理の時点で登録されていた factory で中身が作られる")
+        #expect(reregisteredFactoryCalls.count == 0, "受理の後に登録し直した factory は使われない")
+    }
+
+    // MARK: - 前面の待ち
+
+    @Test("[TS-HW-04] 前面の待ちの間に受理された Toast は、duration より長く待っても破棄されず、載った時点から数えた duration で消える")
+    func TS_HW_04_foregroundWaitDisplayCountsFromAttachment() async throws {
+        let harness = ToastTestHarness(hasHost: false, isAppInForeground: true)
+        defer { harness.tearDown() }
+        let recorder = ToastTypedShowRecorder()
+
+        try Self.showImmediateContent(harness, recorder: recorder, duration: Self.foregroundWaitDuration)
+        await harness.drainAcceptance()
+        #expect(harness.displayCount == 1, "提示先が無くても受理は成立する")
+
+        // duration より長く提示先が無いまま置く。
+        try await Task.sleep(for: .milliseconds(Self.foregroundWaitDuration) + Self.overDurationWait)
+        #expect(harness.displayCount == 1, "duration より長く待っても破棄されない")
+        #expect(harness.containers.isEmpty, "まだ器は取り付かない")
+        #expect(recorder.creationCount == 0, "待っている間は View factory が呼ばれない")
+
+        let appearedAt = ContinuousClock.now
+        harness.surface.returnHost(harness.window)
+
+        #expect(recorder.creationCount == 1, "提示先が現れた時点で中身が作られる")
+        #expect(await harness.waitUntilPresenting(), "提示先の出現で表示される")
+        #expect(await harness.waitUntilEmpty())
+        let elapsed = appearedAt.duration(to: .now)
+        #expect(
+            elapsed >= .milliseconds(Self.foregroundWaitDuration)
+                && elapsed < .milliseconds(Self.foregroundWaitDuration) + Self.deadlineAllowance,
+            "載った時点から数えた duration の到達で消える (載ってから \(elapsed))"
+        )
+    }
+
+    @Test("[TS-HW-05] 前面の待ちのまま背面へ下がった Toast は、下がった時点から数え始める")
+    func TS_HW_05_foregroundWaitDisplayCountsFromDeparture() async throws {
+        let harness = ToastTestHarness(hasHost: false, isAppInForeground: true)
+        defer { harness.tearDown() }
+        let recorder = ToastTypedShowRecorder()
+
+        try Self.showImmediateContent(harness, recorder: recorder, duration: Self.foregroundWaitDuration)
+        await harness.drainAcceptance()
+        try #require(harness.displayCount == 1)
+
+        try await Task.sleep(for: .milliseconds(Self.foregroundWaitDuration) + Self.overDurationWait)
+        #expect(harness.displayCount == 1, "背面へ下がるまでは破棄されない")
+
+        let leftAt = ContinuousClock.now
+        harness.surface.leaveForeground()
+        #expect(harness.displayCount == 1, "下がった直後はまだ破棄されない")
+
+        #expect(await harness.waitUntilEmpty())
+        let elapsed = leftAt.duration(to: .now)
+        #expect(
+            elapsed >= .milliseconds(Self.foregroundWaitDuration)
+                && elapsed < .milliseconds(Self.foregroundWaitDuration) + Self.deadlineAllowance,
+            "下がった時点から数えた duration の到達で破棄される (下がってから \(elapsed))"
+        )
+        #expect(harness.containers.isEmpty, "一度も表示されない")
+        #expect(recorder.creationCount == 0, "中身は一度も作られない")
+        #expect(harness.surface.hostAppearance.activeRegistrationCount == 0, "提示先の出現の購読は解除される")
+        #expect(harness.surface.foregroundDeparture.activeRegistrationCount == 0, "前面を離れた合図の購読は解除される")
+    }
+
+    @Test("[TS-HW-06] 背面へ下がった後、期限の前に提示先が現れたら、下がった時点から数えた期限まで表示される")
+    func TS_HW_06_departedDisplayShowsUntilDeadlineFromDeparture() async throws {
+        let harness = ToastTestHarness(hasHost: false, isAppInForeground: true)
+        defer { harness.tearDown() }
+        let recorder = ToastTypedShowRecorder()
+
+        try Self.showImmediateContent(harness, recorder: recorder, duration: Self.foregroundWaitDuration)
+        await harness.drainAcceptance()
+        try #require(harness.displayCount == 1)
+        try await Task.sleep(for: .milliseconds(Self.foregroundWaitDuration) + Self.overDurationWait)
+
+        let leftAt = ContinuousClock.now
+        harness.surface.leaveForeground()
+
+        // 下がってから duration に達する前に、前面へ戻って提示先が現れる。
+        try await Task.sleep(for: Self.backgroundStay)
+        harness.surface.returnHost(harness.window)
+
+        #expect(recorder.creationCount == 1, "提示先が現れた時点で中身が作られる")
+        #expect(await harness.waitUntilPresenting(), "提示先が現れた時点で表示される")
+        #expect(await harness.waitUntilEmpty())
+        let elapsed = leftAt.duration(to: .now)
+        // 載った時点から数え直していれば、下がってから backgroundStay + duration より後に消える。
+        #expect(
+            elapsed >= .milliseconds(Self.foregroundWaitDuration)
+                && elapsed < .milliseconds(Self.foregroundWaitDuration) + Self.backgroundStay,
+            "背面へ下がった時点から数えた duration の到達で消える (下がってから \(elapsed))"
+        )
+    }
+
+    /// 出入りの演出を待たずに進む中身で、カスタム Toast を表示する。
+    ///
+    /// 撤去が期限の到達の直後に終わるので、表示リストが空になった時点を期限の到達として読める。
+    private static func showImmediateContent(
+        _ harness: ToastTestHarness,
+        recorder: ToastTypedShowRecorder,
+        duration: Int
+    ) throws {
+        let probe = DialogTransitionProbe()
+        try harness.toast.show(ConfigurableToastTestViewModel(), duration: duration) { viewModel in
+            recorder.recordContent(title: viewModel.title)
+            let view = FixedContentSizeView(contentSize: CGSize(width: 200, height: 60))
+            view.ksDialogTransition = DialogTransition(
+                presentation: probe.immediateHook(.presentation),
+                dismissal: probe.immediateHook(.dismissal)
+            )
+            return view
+        }
+    }
+
+    /// 前面の待ちを確かめる duration (ミリ秒)。
+    private static let foregroundWaitDuration = 1500
+
+    /// 前面の待ちで、duration を明らかに超えたと言えるまで余分に置く時間。
+    private static let overDurationWait = Duration.milliseconds(1000)
+
+    /// 背面へ下がってから提示先を出すまでの時間。duration より短い。
+    private static let backgroundStay = Duration.milliseconds(1000)
+
+    /// 期限の到達から表示リストが空になるまでの遅れとして許す幅。
+    private static let deadlineAllowance = Duration.milliseconds(1000)
+
+    /// 提示先の出現待ちの観察に使う duration。
+    private static let hostWaitDuration = 1200
+
+    /// 提示先が無いまま置いておく時間。
+    private static let hostlessPeriod = Duration.milliseconds(600)
+
+    /// 期限を越えてから、その場で取り付け先を戻して提示先の出現の合図を送る。
     ///
     /// 同期の関数にしてメインスレッドを占有したまま期限を越えるので、
-    /// 期限のタイマー (MainActor 上の Task) は復帰の処理より後にしか走れない。
+    /// 期限のタイマー (MainActor 上の Task) は合図の処理より後にしか走れない。
     @MainActor
     private static func returnHostAfterDeadline(
         _ harness: ToastTestHarness,
         waiting seconds: TimeInterval
     ) {
         harness.surface.hostView = harness.window
+        harness.surface.isAppInForeground = true
         Thread.sleep(forTimeInterval: seconds)
-        harness.coordinator.attachPendingDisplays()
+        harness.surface.fireHostAppearance()
     }
 
     @Test("[TS-CO-08] 計時は受理時点から進み、入りの途中でも duration 到達で出へ移る")
     func TS_CO_08_deadlineOverridesUnfinishedPresentation() async throws {
+        // 提示先がある状態で受理するので、計時は受理の時点から進む。
         let harness = ToastTestHarness()
         defer { harness.tearDown() }
         let probe = DialogTransitionProbe()

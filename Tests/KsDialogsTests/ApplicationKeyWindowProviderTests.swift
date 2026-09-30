@@ -23,7 +23,7 @@ struct ApplicationKeyWindowProviderTests {
         try #require(keyWindow.isKeyWindow)
 
         let selected = ApplicationKeyWindowProvider.selectKeyWindow(from: [
-            DialogWindowSceneSnapshot(isForegroundActive: true, windows: [otherWindow, keyWindow])
+            DialogWindowSceneSnapshot(activationState: .foregroundActive, windows: [otherWindow, keyWindow])
         ])
 
         #expect(selected === keyWindow)
@@ -35,7 +35,7 @@ struct ApplicationKeyWindowProviderTests {
         defer { keyWindow.isHidden = true }
 
         let selected = ApplicationKeyWindowProvider.selectKeyWindow(from: [
-            DialogWindowSceneSnapshot(isForegroundActive: false, windows: [keyWindow])
+            DialogWindowSceneSnapshot(activationState: .foregroundInactive, windows: [keyWindow])
         ])
 
         #expect(selected == nil)
@@ -46,7 +46,7 @@ struct ApplicationKeyWindowProviderTests {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
 
         let selected = ApplicationKeyWindowProvider.selectKeyWindow(from: [
-            DialogWindowSceneSnapshot(isForegroundActive: true, windows: [window])
+            DialogWindowSceneSnapshot(activationState: .foregroundActive, windows: [window])
         ])
 
         #expect(selected == nil)

@@ -80,8 +80,8 @@ struct LoadingStartFailureTests {
         let harness = LoadingTestHarness()
         defer { harness.tearDown() }
         let callerBox = CallerTaskBox()
-        // 取り付け先を読むのは合流の受理が済んだ後の器の組み立てなので、
-        // 「状態は確定したが呼び出し元へ身分証が渡っていない」時点をここで捕まえられる。
+        // 取り付け先を読むのは開始の受理の途中 (呼び出し元へ身分証を返す前) なので、
+        // 「開始は受理されたが呼び出し元へ身分証が渡っていない」時点をここで捕まえられる。
         let surface = HostReadHookSurface(host: harness.window) { callerBox.cancelCaller() }
         let coordinator = LoadingCoordinator(
             registry: LoadingViewRegistry(),
@@ -136,6 +136,20 @@ struct LoadingStartFailureTests {
         var hostView: UIView? {
             onHostRead()
             return host
+        }
+
+        /// 提示先の出現の合図の発火口。`fireHostAppearance()` で合図を送る。
+        let hostAppearance = DialogTestHostAppearanceSignal()
+
+        func observeHostAppearance(
+            _ handler: @escaping DialogHostAppearanceHandler
+        ) -> DialogHostAppearanceRegistration {
+            hostAppearance.observe(handler)
+        }
+
+        /// 提示先の出現の合図を送る (本番の window の key 化・シーンのアクティブ化に対応する)。
+        func fireHostAppearance() {
+            hostAppearance.fire()
         }
     }
 }

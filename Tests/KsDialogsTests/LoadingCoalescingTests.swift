@@ -320,18 +320,64 @@ struct LoadingCoalescingTests {
     func LD_CO_13_startDuringDismissalWaitsForCompletion() async throws {
         let harness = LoadingTestHarness()
         defer { harness.tearDown() }
+        // ライブラリ既定の出の演出はアニメーションの実行時間に従うため、実行機が速い回には
+        // 「出の途中」が一瞬で終わり、そこへ新しい開始を差し込めない。
+        // 出の完了を門で押さえる添付演出を持つカスタム View を第1世代にして、途中の窓を作る。
+        // 押さえを時限にすると、実行機がその間だけ止まった回に窓を取り逃がして
+        // 「新しい開始が撤去済みの状態から始まった」回が混じるため、開けるまで完了しない形にする。
+        let probe = DialogTransitionProbe()
+        let dismissalGate = DialogTransitionGate()
+        harness.registry.register(LoadingTestViewModel.self) { _ in
+            let view = FixedContentSizeView(contentSize: CGSize(width: 120, height: 80))
+            view.ksDialogTransition = DialogTransition(
+                presentation: probe.immediateHook(.presentation),
+                dismissal: probe.gatedHook(.dismissal, gate: dismissalGate)
+            )
+            return view
+        }
 
-        await harness.loading.show(message: "A")
+        try await harness.loading.show(LoadingTestViewModel())
         let firstContainerView = try #require(harness.containerView)
+        let firstContentView = try #require(harness.contentView)
+        // 第1世代にメッセージを持たせる (合流1件を重ねる)。新世代がこれを引き継がないことを見る。
+        // 合流が成立していないと引き継ぐ元のメッセージが無く、最後の検査が何も見ずに通る。
+        await harness.loading.show(message: "A")
+        #expect(harness.coordinator.coalescedUseCount == 2, "前提: メッセージ付きの表示が第1世代へ合流している")
+        // 入りの演出を終えてから閉じる。実効値が固まる前に閉じると出の演出は走らず即時に撤去され、
+        // 「出の途中」という状況そのものが成立しない。
+        try #require(
+            await DialogTestWaiting.waitUntil { probe.hasEvent(.finished(.presentation)) },
+            "前提: 入りの演出が終わっている"
+        )
 
         let hiding = Task { await harness.loading.hide() }
-        // 出の演出が始まっていることを確かめてから、新しい表示を開始する。
-        try #require(await DialogTestWaiting.waitUntil { harness.coordinator.isDismissing })
-        await harness.loading.show()
+        // 出の演出が始まっていることをフックの呼び出しで確かめてから、新しい表示を開始する。
+        try #require(
+            await DialogTestWaiting.waitUntil { probe.callCount(.dismissal) == 1 },
+            "前提: 出の演出が始まっている (門を開けていないので、この状態を通り過ぎることはない)"
+        )
+        // 新しい開始は進行中の撤去の完了を待って中断する。門を開ける前にこの要求を撤去待ちの列へ
+        // 載せておくことで、「出の途中に差し込まれた開始」であることが実行機の速さに依らず定まる。
+        //
+        // 差し込みには、公開入口 `Loading.show()` が1行で委譲している先の UI スレッド隔離の受理口を
+        // 直接呼ぶ。`Loading.show()` 自体は隔離されていない async メソッドで、本体は呼び出し元の
+        // UI スレッドを離れて走るため、印を付けてから受理口に入るまでに実行機の乗り換えが挟まり、
+        // 印を観測できた時点でまだ列に載っていない回があり得る。隔離された受理口を直接呼べば、
+        // 印から撤去待ちの中断点までが同じ区間に収まり、印が観測できた時点で列に載ったことが定まる
+        // (公開入口を通らないので、入口そのものの検査はこのテストの守備範囲外になる)。
+        let queueing = LoadingTestCallStartRecorder()
+        let showing = Task { @MainActor in
+            queueing.markStarted()
+            _ = try? await harness.coordinator.beginUse(.builtin, message: nil, placement: nil)
+        }
+        try #require(await DialogTestWaiting.waitUntil { queueing.hasStarted })
+        dismissalGate.open()
+        await showing.value
         await hiding.value
 
         let secondContainerView = try #require(harness.containerView)
         #expect(secondContainerView !== firstContainerView, "新世代として器が作り直される")
+        #expect(harness.contentView !== firstContentView, "旧世代の中身を引き継がない")
         #expect(firstContainerView.superview == nil, "旧世代は撤去されている")
         #expect(harness.attachedContainerViews.count == 1)
         #expect(harness.builtinText == nil, "旧世代のメッセージを引き継がない")
@@ -345,12 +391,22 @@ struct LoadingCoalescingTests {
     func LD_CO_14_actionRunsWithoutPresentationHost() async throws {
         let harness = LoadingTestHarness(hasHost: false)
         defer { harness.tearDown() }
+        let gate = DialogTransitionGate()
+        let callStart = LoadingTestCallStartRecorder()
 
-        let value = try await harness.loading.start { _ in 7 }
-
-        #expect(value == 7, "表示の不成立を理由に保留・放棄されない")
-        #expect(harness.isPresenting == false)
+        let scope = Task {
+            try await harness.loading.start { _ in
+                callStart.markStarted()
+                try await gate.wait()
+                return 7
+            }
+        }
+        try #require(await DialogTestWaiting.waitUntil { callStart.hasStarted }, "action は提示先を待たずに始まる")
+        #expect(harness.isPresenting == false, "提示先が現れるまでは表示されない")
         #expect(harness.attachedContainerViews.isEmpty)
+
+        gate.open()
+        #expect(try await scope.value == 7, "表示の不成立を理由に保留・放棄されない")
     }
 
     @Test("[LD-CO-15] 異なる入口からの利用は1つの表示に合流する")

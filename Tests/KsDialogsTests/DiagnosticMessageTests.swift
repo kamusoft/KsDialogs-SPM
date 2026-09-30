@@ -18,10 +18,6 @@ struct DiagnosticMessageTests {
                 "No View factory is registered for ViewModel type \(viewModelType)."
             ),
             (
-                .presentationHostUnavailable,
-                "No screen is available to present the Dialog."
-            ),
-            (
                 .viewFactoryTypeMismatch(viewModelType: viewModelType),
                 "The registered View factory cannot accept ViewModel type \(viewModelType)."
             ),
@@ -45,7 +41,7 @@ struct DiagnosticMessageTests {
         ]
 
         // case の数だけ期待値を並べたことを固定する (case が増えたら期待値も足す)。
-        #expect(expectations.count == 7)
+        #expect(expectations.count == 6)
         for (error, expected) in expectations {
             #expect(error.errorDescription == expected)
             #expect(error.localizedDescription == expected)

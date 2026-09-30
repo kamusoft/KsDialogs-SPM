@@ -12,20 +12,33 @@ import UIKit
 @MainActor
 enum DialogSwiftUIMeasurement {
     /// 実効値の固定まで進んだ器と window。呼び出し側が使い終わるまで保持して自分で隠す。
+    /// `pageArea` を渡すと、その矩形を表示中のページとして持つ window の上へ器を重ねる。
     static func layoutInWindow<Content: View>(
         content: Content,
         showPlacement: DialogPlacement? = nil,
         screen: DialogLayoutCase.Size,
         insets: DialogLayoutCase.Insets,
+        pageArea: DialogLayoutCase.Rect? = nil,
         resultChannel: DialogResultChannel = DialogResultChannel()
     ) async throws -> (container: DialogContainerViewController, window: UIWindow) {
-        let stage = DialogLayoutMeasurement.layoutInWindow(
-            content: DialogSwiftUIHost.makeContent(content),
-            showPlacement: showPlacement,
-            screen: screen,
-            insets: insets,
-            resultChannel: resultChannel
-        )
+        let stage = if let pageArea {
+            DialogLayoutMeasurement.layoutOverPage(
+                content: DialogSwiftUIHost.makeContent(content),
+                showPlacement: showPlacement,
+                screen: screen,
+                insets: insets,
+                pageArea: pageArea,
+                resultChannel: resultChannel
+            )
+        } else {
+            DialogLayoutMeasurement.layoutInWindow(
+                content: DialogSwiftUIHost.makeContent(content),
+                showPlacement: showPlacement,
+                screen: screen,
+                insets: insets,
+                resultChannel: resultChannel
+            )
+        }
         let frozen = await DialogTestWaiting.waitUntil { stage.container.isLayoutSnapshotFrozen }
         try #require(frozen, "実効値が固定されなかった")
         stage.window.layoutIfNeeded()
@@ -37,13 +50,15 @@ enum DialogSwiftUIMeasurement {
         content: Content,
         showPlacement: DialogPlacement? = nil,
         screen: DialogLayoutCase.Size,
-        insets: DialogLayoutCase.Insets
+        insets: DialogLayoutCase.Insets,
+        pageArea: DialogLayoutCase.Rect? = nil
     ) async throws -> CGRect {
         let stage = try await layoutInWindow(
             content: content,
             showPlacement: showPlacement,
             screen: screen,
-            insets: insets
+            insets: insets,
+            pageArea: pageArea
         )
         defer { stage.window.isHidden = true }
         return stage.container.contentView.frame

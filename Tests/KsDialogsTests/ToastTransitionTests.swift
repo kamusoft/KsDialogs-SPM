@@ -9,7 +9,7 @@ import UIKit
 /// カスタム Toast View には Dialog / Loading と同じ意味で `ksDialogTransition` が効き、
 /// 添付を省略したカスタム View とデフォルト View は器の既定演出で出入りする。
 /// Toast は結果を持たないため、結果のラッチと配送は対象外である。
-@Suite("Toast の出入りの演出", .serialized)
+@Suite("Toast の出入りの演出", .serialized, .awaitsMainActorResponsive)
 @MainActor
 struct ToastTransitionTests {
     @Test("[TS-TR-01] カスタム View の演出フックが両局面で呼ばれる")

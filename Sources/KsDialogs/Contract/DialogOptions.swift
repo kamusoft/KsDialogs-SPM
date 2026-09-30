@@ -14,8 +14,8 @@ public struct DialogOptions: Sendable, Equatable {
     /// サイズと位置の計算の基準になる領域。既定は可視領域。
     public var layoutArea: DialogLayoutArea
 
-    /// 基準 rect の各辺から控除する余白。最大サイズと配置の両方に効く。既定は全辺 24。
-    /// 負の辺はその辺だけ 0 に、非有限値の辺は既定値に丸める。
+    /// 基準 rect の各辺から控除する余白。最大サイズと配置の両方に効く。既定は全辺 0。
+    /// 負の辺と非有限値の辺は、その辺だけ 0 に丸める。
     public var dialogMargin: DialogEdgeInsets
 
     /// 基準 rect の幅に対する比率。0 < 値 ≤ 1 で比率指定が成立する。
@@ -32,9 +32,10 @@ public struct DialogOptions: Sendable, Equatable {
     /// false のとき外側タップは何も起こさず、タップは背後の画面へ透過しない。
     public var isCanceledOnTouchOutside: Bool
 
+    // 余白の既定は全辺 0 (core/ADR-0039)。
     public init(
         layoutArea: DialogLayoutArea = .visibleArea,
-        dialogMargin: DialogEdgeInsets = DialogEdgeInsets(all: 24),
+        dialogMargin: DialogEdgeInsets = DialogEdgeInsets(all: 0),
         proportionalWidth: Double = -1,
         proportionalHeight: Double = -1,
         overlayColor: UIColor = UIColor(white: 0, alpha: 0.4),

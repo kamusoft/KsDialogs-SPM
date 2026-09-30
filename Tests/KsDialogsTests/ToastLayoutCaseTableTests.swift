@@ -28,7 +28,8 @@ struct ToastLayoutCaseTableTests {
             contentView: contentView,
             fallbackPlacement: DialogPlacement(),
             screen: layoutCase.screen,
-            insets: layoutCase.insets
+            insets: layoutCase.insets,
+            pageArea: layoutCase.pageArea
         )
 
         let tolerance = DialogLayoutCaseLoader.table.tolerance

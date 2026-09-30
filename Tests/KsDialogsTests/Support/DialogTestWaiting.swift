@@ -28,6 +28,36 @@ enum DialogTestWaiting {
         return condition()
     }
 
+    /// MainActor が空いているとみなす、1 往復の遅れの上限。
+    static let responsiveHop = Duration.milliseconds(20)
+
+    /// 空いていると認めるまでに、続けて上限を下回る往復の回数。
+    static let responsiveHopCount = 3
+
+    /// MainActor に積まれた仕事がはけて、1 往復が [responsiveHop] を下回り続けるまで待つ。
+    ///
+    /// 並列に走る他のスイートが MainActor に仕事を積んでいる間は、MainActor へ積んだ仕事が
+    /// 走り出すまでに数百ミリ秒〜1 秒を超える遅れが出る。実時間の期限を持つ表示 (Toast の duration)
+    /// は受理の時点から計時が進むため、この遅れが期限より長いと、表示は取り付く前に満了して
+    /// 捨てられる。期限の短い表示を観察するテストは、表示の要求を出す前にここで空くのを待つ。
+    ///
+    /// 時間切れになっても失敗にはせず false を返す (その後の観察が落ちれば、そちらが失敗を記録する)。
+    @MainActor
+    @discardableResult
+    static func awaitMainActorResponsive(timeout: Duration = .seconds(30)) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        var consecutive = 0
+        while ContinuousClock.now < deadline {
+            let startedAt = ContinuousClock.now
+            // 末尾に積んだ仕事が走り、呼び出し元へ戻るまでを 1 往復として測る。
+            await Task { @MainActor in }.value
+            let hop = startedAt.duration(to: .now)
+            consecutive = hop < responsiveHop ? consecutive + 1 : 0
+            if consecutive >= responsiveHopCount { return true }
+        }
+        return false
+    }
+
     /// 落ち着き待ちの 1 回の観測。
     struct Reading {
         /// 目的の終端状態に達しているか。

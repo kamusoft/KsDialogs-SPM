@@ -36,8 +36,11 @@ final class ToastCoordinator {
     /// 表示中の Toast。並びがそのまま起動順で、後ろほど手前に重なる。
     private var displays: [ToastDisplay] = []
 
-    /// 取り付け先の出現を待つ間だけ立てる見張り。
-    private var hostObserver: (any NSObjectProtocol)?
+    /// 取り付け先の出現を待つ間だけ張る、提示先の出現の合図の購読。
+    private var hostAppearanceRegistration: DialogHostAppearanceRegistration?
+
+    /// 期限を決めずに待っている表示がある間だけ張る、前面を離れた合図の購読。
+    private var foregroundDepartureRegistration: DialogHostAppearanceRegistration?
 
     nonisolated init(
         registry: ToastViewRegistry = .shared,
@@ -52,9 +55,8 @@ final class ToastCoordinator {
     }
 
     isolated deinit {
-        if let hostObserver {
-            NotificationCenter.default.removeObserver(hostObserver)
-        }
+        hostAppearanceRegistration?.cancel()
+        foregroundDepartureRegistration?.cancel()
     }
 
     // MARK: - 観察 (テストと内部からの読み取り)
@@ -93,13 +95,12 @@ final class ToastCoordinator {
         duration: Int?,
         placement: DialogPlacement?
     ) throws {
-        if case .registered(let viewModel) = request {
-            _ = try resolveFactory(for: viewModel)
-        }
+        // View factory の登録は受理の時点で解決し、取り付けの時点では引き直さない。
+        let request = try resolveFactoryIfNeeded(request)
         let style = settings.style
         let durationMilliseconds = Self.effectiveDuration(duration, style: style)
-        // 計時は受理時点から始まり、実時間で消費する (アプリが背面にある間も進む)。
-        let deadline = ContinuousClock.now.advanced(by: .milliseconds(durationMilliseconds))
+        // 受理の時刻はここで記録する。そこから数えるかどうかは、UI スレッドの開始処理の時点の状態で決める。
+        let acceptedAt = ContinuousClock.now
         let fallbackPlacement = style.defaultPlacement ?? ToastPlacementDefault.placement
         acceptanceQueue.enqueue { [self] in
             beginDisplay(
@@ -107,7 +108,8 @@ final class ToastCoordinator {
                 style: style,
                 placement: placement,
                 fallbackPlacement: fallbackPlacement,
-                deadline: deadline
+                acceptedAt: acceptedAt,
+                duration: .milliseconds(durationMilliseconds)
             )
         }
     }
@@ -126,70 +128,108 @@ final class ToastCoordinator {
 
     // MARK: - 表示の出し入れ
 
-    /// 受理した1枚を組み立てて表示に載せる。
+    /// 受理した1枚を表示リストに載せ、取り付けと期限の計時を始める。
     ///
-    /// 中身の実体化に失敗したら、その1枚だけを破棄して資源を解放する。
-    /// 他の表示には影響せず、呼び出し元へも返さない (既に戻っているため)。
+    /// 中身はここでは作らず、取り付けの時点で作る (`attachIfPossible`、core/ADR-0042)。
+    ///
+    /// アプリが前面にいるのに取り付け先が無ければ (前面の待ち)、期限を決めずに待たせ、取り付けた時点から
+    /// 数える (core/ADR-0043)。起動の途中や割り込みの最中に表示時間を使い切らないようにするため。
+    /// それ以外は受理の時点から実時間で数える (アプリが背面にある間も進む)。
+    /// 判定は前面・取り付け先の状態が変わるのと同じ UI スレッドの手番で行い、判定と載せる処理を食い違わせない。
     private func beginDisplay(
         _ request: ToastContentRequest,
         style: ToastStyle,
         placement: DialogPlacement?,
         fallbackPlacement: DialogPlacement,
-        deadline: ContinuousClock.Instant
+        acceptedAt: ContinuousClock.Instant,
+        duration: Duration
     ) {
-        guard ContinuousClock.now < deadline else {
+        let display = ToastDisplay(
+            request: request,
+            style: style,
+            showPlacement: placement,
+            fallbackPlacement: fallbackPlacement,
+            acceptedAt: acceptedAt,
+            duration: duration
+        )
+        let isForegroundWait = presentationSurface.hostView == nil && presentationSurface.isAppInForeground
+        if !isForegroundWait {
+            display.fixDeadline(startingAt: acceptedAt)
+        }
+        guard !display.hasReachedDeadline() else {
             // 受理から MainActor へ届くまでの遅れだけで期限を越えた表示。
             // 中身も器も作らずに捨てる (満了した表示は表示されない)。
             return
         }
-        let resolved: ToastResolvedContent
-        do {
-            resolved = try makeContent(for: request, style: style)
-        } catch {
-            Self.logger.warning(
-                "Could not create the Toast content. This presentation is discarded: \(error.localizedDescription, privacy: .public)"
-            )
-            return
-        }
-        let display = ToastDisplay(
-            content: resolved.content,
-            viewModel: resolved.viewModel,
-            showPlacement: placement,
-            fallbackPlacement: fallbackPlacement,
-            deadline: deadline
-        )
         displays.append(display)
         attachIfPossible(display)
+        startDeadlineTimer(display)
+    }
+
+    /// 期限の決まった表示について、期限を待つ仕事を始める。
+    ///
+    /// 期限が未確定の表示・既に待ち始めた表示・破棄された表示 (中身の生成の失敗) では何もしない。
+    private func startDeadlineTimer(_ display: ToastDisplay) {
+        guard let deadline = display.deadline,
+              display.timerTask == nil,
+              !display.isFinishing else { return }
         display.timerTask = Task { @MainActor [weak self] in
             try? await Task.sleep(until: deadline, clock: .continuous)
             await self?.finish(display)
         }
     }
 
-    /// 取り付け先があれば器を作って重ねる。
+    /// まだ期限の無い表示について、`start` から数えた期限を決め、待ち始める。
+    private func fixDeadlineAndStartTimer(_ display: ToastDisplay, startingAt start: ContinuousClock.Instant) {
+        guard display.fixDeadline(startingAt: start) else { return }
+        startDeadlineTimer(display)
+    }
+
+    /// 取り付け先があれば中身と器を作って重ねる。
     ///
-    /// 取り付け先が無いときは表示を保留し、提示先の出現を待つ。
-    /// 計時は受理時点から進んでいるため、現れないまま期限が来た表示は表示されずに破棄される。
+    /// 取り付け先が無いときは中身を作らずに表示を保留し、提示先の出現を待つ。
+    /// 期限の決まった表示は待つ間も時間が進むため、現れないまま期限が来た表示は、中身を作らずに破棄される
+    /// (型指定経路の ViewModel の生成と configure も走らない)。
     /// 期限の確認はここでも行う — 取り付け先の復帰が期限のタイマーより先に走っても、
     /// 満了した表示を一瞬見せないようにする。
+    /// 期限を決めずに待っている表示は、前面を離れた合図も待ち、取り付けた時点から数え始める (core/ADR-0043)。
+    ///
+    /// 中身の実体化に失敗したら、その1枚だけを破棄して資源を解放する。
+    /// 他の表示には影響せず、呼び出し元へも返さない (既に戻っているため)。
     private func attachIfPossible(_ display: ToastDisplay) {
         guard display.container == nil, !display.isFinishing else { return }
-        guard ContinuousClock.now < display.deadline else {
+        guard !display.hasReachedDeadline() else {
             discard(display)
             return
         }
         guard let hostView = presentationSurface.hostView else {
             startWaitingForHost()
+            if display.deadline == nil {
+                startWaitingForForegroundDeparture()
+            }
             return
         }
+        let resolved: ToastResolvedContent
+        do {
+            resolved = try makeContent(for: display.request, style: display.style)
+        } catch {
+            Self.logger.warning(
+                "Could not create the Toast content. This presentation is discarded: \(error.localizedDescription, privacy: .public)"
+            )
+            discard(display)
+            return
+        }
+        display.viewModel = resolved.viewModel
         let container = ToastContainerViewController(
-            content: display.content,
+            content: resolved.content,
             placement: display.showPlacement,
             fallbackPlacement: display.fallbackPlacement
         )
         display.container = container
         // Loading が同じ取り付け先に載っているときは、その下へ入れて常に Loading を前面に保つ。
         container.attach(to: hostView, below: Self.lowestLoadingView(in: hostView))
+        // 画面が利用者に見えた時点から数える。既に期限の決まった表示では何も変わらない。
+        fixDeadlineAndStartTimer(display, startingAt: .now)
     }
 
     /// 取り付け先に載っている Loading の器のうち、最も奥にある View。
@@ -206,47 +246,86 @@ final class ToastCoordinator {
         }
         display.releaseResources()
         displays.removeAll { $0 === display }
-        stopWaitingForHostIfSatisfied()
+        stopWaitingIfSatisfied()
+    }
+
+    /// 表示中のすべての Toast を、演出も期限も待たずに捨てる。
+    ///
+    /// 公開の入口からは呼ばれない。検証の後始末で、器だけでなく表示と期限の計時も残さないために使う
+    /// (期限まで表示が残ると、中身と ViewModel を握り続けるため)。期限による撤去が進行中の表示と
+    /// 重なっても、撤去は 1 回分しか効かない。
+    func discardAll() {
+        for display in displays {
+            discard(display)
+        }
     }
 
     /// 表示を成立しなかったものとして捨てる。演出は走らせない。
+    /// 器が取り付いていれば、その場で取り付け先から外す。
     private func discard(_ display: ToastDisplay) {
         display.isFinishing = true
         display.timerTask?.cancel()
+        display.container?.removeImmediately()
         display.releaseResources()
         displays.removeAll { $0 === display }
-        stopWaitingForHostIfSatisfied()
+        stopWaitingIfSatisfied()
     }
 
     // MARK: - 取り付け先の出現待ち
 
     /// 取り付け先が現れるのを待ち始める。既に待っていれば何もしない。
     private func startWaitingForHost() {
-        guard hostObserver == nil else { return }
-        hostObserver = NotificationCenter.default.addObserver(
-            forName: UIWindow.didBecomeKeyNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.attachPendingDisplays()
-            }
+        guard hostAppearanceRegistration == nil else { return }
+        hostAppearanceRegistration = presentationSurface.observeHostAppearance { [weak self] in
+            self?.attachPendingDisplays()
         }
     }
 
-    /// 保留中の表示を取り付け直す。
-    func attachPendingDisplays() {
+    /// 保留中の表示を取り付け直す。提示先の出現の合図で呼ばれる。
+    ///
+    /// 合図は「現れたかもしれない」ことだけを知らせるので、取り付け先が無ければ待ち続ける。
+    private func attachPendingDisplays() {
         for display in displays where display.container == nil {
             attachIfPossible(display)
         }
-        stopWaitingForHostIfSatisfied()
+        stopWaitingIfSatisfied()
     }
 
-    /// 保留中の表示が無くなったら見張りを畳む。
-    private func stopWaitingForHostIfSatisfied() {
-        guard let hostObserver, !displays.contains(where: { $0.container == nil }) else { return }
-        NotificationCenter.default.removeObserver(hostObserver)
-        self.hostObserver = nil
+    /// 前面を離れた合図を待ち始める。既に待っていれば何もしない。
+    private func startWaitingForForegroundDeparture() {
+        guard foregroundDepartureRegistration == nil else { return }
+        foregroundDepartureRegistration = presentationSurface.observeForegroundDeparture { [weak self] in
+            self?.fixDeadlinesOnForegroundDeparture()
+        }
+    }
+
+    /// 期限を決めずに待っていた表示の期限を、前面を離れた時点から数えて決める。
+    ///
+    /// 取り付け先に載らないまま背面へ下がった表示は、背面の表示と同じく実時間で数え始める
+    /// (core/ADR-0043)。その期限の前に取り付け先が現れれば、その期限まで表示する。
+    private func fixDeadlinesOnForegroundDeparture() {
+        let now = ContinuousClock.now
+        for display in displays {
+            fixDeadlineAndStartTimer(display, startingAt: now)
+        }
+        stopWaitingIfSatisfied()
+    }
+
+    /// 待つ理由の無くなった購読を解除する。
+    ///
+    /// 提示先の出現の合図は、取り付け先を待つ表示がある間だけ張る。
+    /// 前面を離れた合図は、期限を決めずに待つ表示がある間だけ張る。
+    private func stopWaitingIfSatisfied() {
+        if let hostAppearanceRegistration,
+           !displays.contains(where: { $0.container == nil }) {
+            hostAppearanceRegistration.cancel()
+            self.hostAppearanceRegistration = nil
+        }
+        if let foregroundDepartureRegistration,
+           !displays.contains(where: { $0.deadline == nil }) {
+            foregroundDepartureRegistration.cancel()
+            self.foregroundDepartureRegistration = nil
+        }
     }
 
     // MARK: - 中身の解決
@@ -271,11 +350,12 @@ final class ToastCoordinator {
             return ToastResolvedContent(content: DialogContent(view: contentView), viewModel: nil)
         case .registered(let viewModel):
             return try makeCustomContent(viewModel: viewModel, factory: resolveFactory(for: viewModel))
-        case .inline(let viewModel, let factory):
-            // レジストリは読まないので、登録の有無は表示にも登録内容にも影響しない (core/ADR-0013)。
+        case .inline(let viewModel, let factory), .resolved(let viewModel, let factory):
+            // 受け取った factory をそのまま使う。ここでレジストリは読まないので、インライン経路では
+            // 登録の有無が表示にも登録内容にも影響せず (core/ADR-0013)、登録経路では受理の時点の登録で作る。
             return try makeCustomContent(viewModel: viewModel, factory: factory)
         case .typed(let prepare, let factory):
-            // ViewModel の生成と configure はここ (UI スレッド上の受理順) で行う。
+            // ViewModel の生成と configure はここ (UI スレッド上の取り付けの時点) で行う。
             // 解決は受理の時点で終わっているため、レジストリは引き直さない。
             return try makeCustomContent(viewModel: prepare(), factory: factory)
         }
@@ -292,6 +372,13 @@ final class ToastCoordinator {
             )
         }
         return ToastResolvedContent(content: content, viewModel: viewModel)
+    }
+
+    /// レジストリ経由の指定を、解決済みの factory を持つ指定に置き換える。
+    /// 未登録の ViewModel 型はここで失敗する。それ以外の指定はそのまま返す。
+    private nonisolated func resolveFactoryIfNeeded(_ request: ToastContentRequest) throws -> ToastContentRequest {
+        guard case .registered(let viewModel) = request else { return request }
+        return .resolved(viewModel: viewModel, factory: try resolveFactory(for: viewModel))
     }
 
     private nonisolated func resolveFactory(for viewModel: any ToastViewModel) throws -> ToastViewFactory {

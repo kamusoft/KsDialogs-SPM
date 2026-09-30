@@ -7,6 +7,11 @@ import UIKit
 /// (core/ADR-0002)。どちらの入口から呼んでも表示は 1 プロセスに 1 つで、合流状態を共有する。
 ///
 /// すべての呼び出しは任意のスレッドから行え、内部で UI スレッドへ移して受理順に直列化される。
+///
+/// 提示先 (前面でアクティブなシーンの key window) が無いまま始まった表示は、処理を通常どおり
+/// 実行したまま提示先の出現を待ち、現れた時点で表示が続いていれば入りの演出から表示する。
+/// その時点で中身を作れなかった場合は、失敗を呼び出し元へ返さずに表示だけを諦める。
+/// 開始時点で提示先があれば中身は開始時点で作り、作れなければ開始の失敗になる。
 public protocol KsLoading: AnyObject, Sendable {
     /// カスタム Loading の ViewModel 型と View factory の紐付け。Dialog のレジストリとは独立している。
     var registry: LoadingViewRegistry { get }
@@ -85,38 +90,59 @@ public protocol KsLoading: AnyObject, Sendable {
     /// 合流1件の開始と終了が処理の開始・完了に対応する。処理は表示状態によらず必ず実行され、
     /// 失敗 (例外・キャンセル) も合流1件の終了として数えたうえで呼び出し元へ伝播する。
     /// 合流最後の1件なら器の撤去まで待ってから戻り、そうでなければ処理の完了時点で戻る。
+    ///
+    /// 処理は、呼び出し元のスレッドによらず UI スレッド (MainActor) で始まる。
+    /// その場で書いたクロージャの中からは、UIKit を含む MainActor の状態に `await` なしで触れられる。
+    /// UI スレッド外で始めるには、クロージャに `@concurrent` を付ける。
+    ///
+    ///     try await Loading.shared.start { report in
+    ///         imageView.image = resized          // UI スレッドで始まる
+    ///     }
+    ///     try await Loading.shared.start { @concurrent report in
+    ///         try await heavyWork(report)        // UI スレッド外で始まる
+    ///     }
+    ///
+    /// 関数を名前で渡した場合は、その関数自身の isolation が優先され、始まるスレッドはその isolation で決まる。
+    /// ここでの「始まる」は処理の最初の文を実行するスレッドを指し、処理の中で `await` した後の実行先は
+    /// Swift の isolation の規則に従う。
     /// - Parameter action: 実行する処理。引数の報告口へ 0〜1 の進捗を報告できる (任意スレッド可)
     func start<T: Sendable>(
         message: String?,
         placement: DialogPlacement?,
-        _ action: @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
+        _ action: @MainActor @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
     ) async throws -> T
 
     /// 登録済みのカスタム Loading View を表示したまま処理を実行し、その戻り値を返す。
     ///
     /// 未登録の ViewModel 型は構成ミスとして失敗し、処理は実行されない (fail-fast)。
+    /// 処理が始まるスレッドは既定ローディングのスコープ形と同じで、既定は UI スレッド、
+    /// `@concurrent` を付けたクロージャなら UI スレッド外である。
     func start<ViewModel: LoadingViewModel, T: Sendable>(
         _ viewModel: ViewModel,
         placement: DialogPlacement?,
-        _ action: @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
+        _ action: @MainActor @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
     ) async throws -> T
 
     /// 登録せずに、その場で渡した factory の中身を表示したまま処理を実行する (core/ADR-0013)。
     /// レジストリの状態は一切変わらない。
+    /// 処理が始まるスレッドは既定ローディングのスコープ形と同じで、既定は UI スレッド、
+    /// `@concurrent` を付けたクロージャなら UI スレッド外である。
     func start<ViewModel: LoadingViewModel, T: Sendable>(
         _ viewModel: ViewModel,
         placement: DialogPlacement?,
         factory: @escaping @MainActor @Sendable (ViewModel) throws -> UIView,
-        _ action: @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
+        _ action: @MainActor @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
     ) async throws -> T
 
     /// 登録せずに、その場で渡した SwiftUI の factory の中身を表示したまま処理を実行する
     /// (core/ADR-0013)。従来 View 系のインライン実行と同名で、factory の戻り値の型だけが違う。
+    /// 処理が始まるスレッドは既定ローディングのスコープ形と同じで、既定は UI スレッド、
+    /// `@concurrent` を付けたクロージャなら UI スレッド外である。
     func start<ViewModel: LoadingViewModel, Content: View, T: Sendable>(
         _ viewModel: ViewModel,
         placement: DialogPlacement?,
         @ViewBuilder factory: @escaping @MainActor @Sendable (ViewModel) throws -> Content,
-        _ action: @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
+        _ action: @MainActor @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
     ) async throws -> T
 
     /// ViewModel の**型**を渡して、登録済みのカスタム Loading View を表示したまま処理を実行する。
@@ -124,11 +150,13 @@ public protocol KsLoading: AnyObject, Sendable {
     /// ViewModel の生成・configure・失敗の扱いは型を渡す表示と同じで、
     /// 開始 → 処理の実行 → 終了の対と戻り値の扱いはインスタンスを渡すスコープ形と同じである。
     /// ViewModel factory と configure が失敗した場合は処理を実行しない。
+    /// 処理が始まるスレッドは既定ローディングのスコープ形と同じで、既定は UI スレッド、
+    /// `@concurrent` を付けたクロージャなら UI スレッド外である。
     func start<ViewModel: LoadingViewModel, T: Sendable>(
         _ viewModelType: ViewModel.Type,
         placement: DialogPlacement?,
         configure: (@MainActor @Sendable (ViewModel) async throws -> Void)?,
-        _ action: @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
+        _ action: @MainActor @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
     ) async throws -> T
 }
 
@@ -149,24 +177,27 @@ public extension KsLoading {
     }
 
     /// メッセージも配置も省略してスコープ形で実行する。
+    /// 処理は既定で UI スレッドで始まり、`@concurrent` を付けたクロージャなら UI スレッド外で始まる。
     func start<T: Sendable>(
-        _ action: @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
+        _ action: @MainActor @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
     ) async throws -> T {
         try await start(message: nil, placement: nil, action)
     }
 
     /// 配置を契約の既定値に委ねてスコープ形で実行する。
+    /// 処理は既定で UI スレッドで始まり、`@concurrent` を付けたクロージャなら UI スレッド外で始まる。
     func start<T: Sendable>(
         message: String?,
-        _ action: @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
+        _ action: @MainActor @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
     ) async throws -> T {
         try await start(message: message, placement: nil, action)
     }
 
     /// 配置を View への添付に委ねてカスタム Loading のスコープ形で実行する。
+    /// 処理は既定で UI スレッドで始まり、`@concurrent` を付けたクロージャなら UI スレッド外で始まる。
     func start<ViewModel: LoadingViewModel, T: Sendable>(
         _ viewModel: ViewModel,
-        _ action: @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
+        _ action: @MainActor @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
     ) async throws -> T {
         try await start(viewModel, placement: nil, action)
     }
@@ -188,19 +219,21 @@ public extension KsLoading {
     }
 
     /// 配置を中身への添付に委ねてインライン表示のスコープ形で実行する。
+    /// 処理は既定で UI スレッドで始まり、`@concurrent` を付けたクロージャなら UI スレッド外で始まる。
     func start<ViewModel: LoadingViewModel, T: Sendable>(
         _ viewModel: ViewModel,
         factory: @escaping @MainActor @Sendable (ViewModel) throws -> UIView,
-        _ action: @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
+        _ action: @MainActor @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
     ) async throws -> T {
         try await start(viewModel, placement: nil, factory: factory, action)
     }
 
     /// 配置を中身への添付に委ねて SwiftUI の中身のインライン表示のスコープ形で実行する。
+    /// 処理は既定で UI スレッドで始まり、`@concurrent` を付けたクロージャなら UI スレッド外で始まる。
     func start<ViewModel: LoadingViewModel, Content: View, T: Sendable>(
         _ viewModel: ViewModel,
         @ViewBuilder factory: @escaping @MainActor @Sendable (ViewModel) throws -> Content,
-        _ action: @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
+        _ action: @MainActor @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
     ) async throws -> T {
         try await start(viewModel, placement: nil, factory: factory, action)
     }
@@ -227,27 +260,30 @@ public extension KsLoading {
     }
 
     /// 登録済みの ViewModel factory に生成を任せ、configure なしでスコープ形で実行する。
+    /// 処理は既定で UI スレッドで始まり、`@concurrent` を付けたクロージャなら UI スレッド外で始まる。
     func start<ViewModel: LoadingViewModel, T: Sendable>(
         _ viewModelType: ViewModel.Type,
-        _ action: @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
+        _ action: @MainActor @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
     ) async throws -> T {
         try await start(viewModelType, placement: nil, configure: nil, action)
     }
 
     /// 登録済みの ViewModel factory に生成を任せ、configure で状態を整えてからスコープ形で実行する。
+    /// 処理は既定で UI スレッドで始まり、`@concurrent` を付けたクロージャなら UI スレッド外で始まる。
     func start<ViewModel: LoadingViewModel, T: Sendable>(
         _ viewModelType: ViewModel.Type,
         configure: @escaping @MainActor @Sendable (ViewModel) async throws -> Void,
-        _ action: @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
+        _ action: @MainActor @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
     ) async throws -> T {
         try await start(viewModelType, placement: nil, configure: configure, action)
     }
 
     /// 登録済みの ViewModel factory に生成を任せ、配置を指定してスコープ形で実行する。
+    /// 処理は既定で UI スレッドで始まり、`@concurrent` を付けたクロージャなら UI スレッド外で始まる。
     func start<ViewModel: LoadingViewModel, T: Sendable>(
         _ viewModelType: ViewModel.Type,
         placement: DialogPlacement?,
-        _ action: @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
+        _ action: @MainActor @Sendable (@Sendable @escaping (Double) -> Void) async throws -> T
     ) async throws -> T {
         try await start(viewModelType, placement: placement, configure: nil, action)
     }

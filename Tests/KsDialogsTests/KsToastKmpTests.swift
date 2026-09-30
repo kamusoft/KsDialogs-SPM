@@ -8,7 +8,7 @@ import UIKit
 ///
 /// 共有コードからの呼び出しそのものは Kotlin 側のテストが担うため、ここでは
 /// 「互換面が受けた表示が状態の正へ届くか」と「型付き登録した中身が共有 VM で解決されるか」を見る。
-@Suite("KMP 面の Toast", .serialized)
+@Suite("KMP 面の Toast", .serialized, .awaitsMainActorResponsive)
 @MainActor
 struct KsToastKmpTests {
     private static let contentSize = CGSize(width: 200, height: 48)

@@ -9,7 +9,7 @@ import UIKit
 /// デフォルト View は表示時にメッセージを読み上げへ流すが、フォーカスは移動させない。
 /// フォーカスを動かす通知 (screenChanged / layoutChanged) を発行しないことがその保証になる。
 /// カスタム View の読み上げは View を供給するアプリの責務なので、器は何も通知しない。
-@Suite("Toast の支援技術への通知", .serialized)
+@Suite("Toast の支援技術への通知", .serialized, .awaitsMainActorResponsive)
 @MainActor
 struct ToastAccessibilityTests {
     @Test("[TS-AC-01] デフォルト View はメッセージを announce しフォーカスを奪わない")

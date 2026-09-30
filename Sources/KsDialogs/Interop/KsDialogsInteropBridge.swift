@@ -57,6 +57,9 @@ public final class KsDialogsInteropBridge: NSObject, Sendable {
     /// ViewModel を渡してダイアログを表示し、結果を completion で1回だけ返す。
     /// 構成エラーは throw ではなく error 判別の結果として返す。
     ///
+    /// 表示の順番は呼び出しの時点で決まる。同じスレッドから続けて呼んだ show は、表示を待つ
+    /// ダイアログの列に呼んだ順のまま並ぶ。別々のスレッドから同時に呼んだ show どうしの順は定まらない。
+    ///
     /// 戻り値は、この1回の show を取り消すためのハンドルである。委譲元の待機が打ち切られたときに
     /// これを使うと、その1枚だけが閉じて結果が cancelled で確定する。
     ///
@@ -89,13 +92,17 @@ public final class KsDialogsInteropBridge: NSObject, Sendable {
     ) -> KsDialogsInteropShowHandle {
         let boxedViewModel = UncheckedSendableBox(viewModel)
         let boxedCompletion = UncheckedSendableBox(completion)
+        // 列の順番は、UI スレッドへ移る前のこの時点で決める。移った先の処理が始まる順は
+        // Task の開始順に左右されるため、続けて呼んだ show が呼んだ順に並ぶことを札で保つ (ios/ADR-0001)。
+        let reservation = DialogPresenter.reserveTurn(on: presentationSurface)
         let presentation = Task { @MainActor in
             do {
                 let outcome = try await DialogPresenter.present(
                     viewModel: boxedViewModel.value,
                     registry: registry,
                     presentationSurface: presentationSurface,
-                    placement: resolvedPlacement
+                    placement: resolvedPlacement,
+                    reservation: reservation
                 )
                 boxedCompletion.value(KsDialogsInteropResult(outcome: outcome))
             } catch {

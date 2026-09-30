@@ -139,8 +139,8 @@ public final class KsDialogsKmp: Sendable {
     /// Native の `viewModel.notifier` の代わりにこの入口で取り出す。
     /// 紐付けと取り出しはインスタンスの同一性で行い、ViewModel の等価比較には依存しない。
     ///
-    /// show が中身を生成する直前に紐付き、結果が呼び出し元へ渡る前に外れる。
-    /// したがって show の前と終わったあとは nil で、表示中だけ値を返す。
+    /// show が表示できる画面を待つ前 (中身を生成する前) に紐付き、結果が呼び出し元へ渡る前に外れる。
+    /// したがって show の前と終わったあとは nil で、表示中 (表示できる画面を待っている間を含む) だけ値を返す。
     ///
     ///     Dialog.shared.kmp.register(SharedConfirmViewModel.self) { viewModel in
     ///         ConfirmContent(notifier: try? Dialog.shared.kmp.notifier(for: viewModel))
@@ -182,7 +182,7 @@ public final class KsDialogsKmp: Sendable {
     ///
     /// `placement` を渡すと、中身に添付された placement をまるごと置換して配置を決める (core/ADR-0015)。
     /// 構成エラーと結果型の不一致では、結果を返さずに throw する — 共有 VM の紐付けと結果型に
-    /// まつわる失敗は `KsDialogsKmpError`、提示できないなどそれ以外の失敗は `DialogError` になる。
+    /// まつわる失敗は `KsDialogsKmpError`、それ以外の失敗は `DialogError` になる。
     @MainActor
     public func show<ViewModel: AnyObject>(
         _ viewModel: ViewModel,

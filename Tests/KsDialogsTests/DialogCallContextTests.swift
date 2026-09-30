@@ -54,8 +54,8 @@ struct DialogCallContextTests {
         #expect(await harness.waitForPresentedContainers(count: 0))
     }
 
-    @Test("提示 host 不在の show は即失敗する")
-    func showWithoutPresentationHostFails() async throws {
+    @Test("[PB-HW-01] 提示先が無い間は待ち、現れたら表示する")
+    func PB_HW_01_waitsWhileNoHostAndPresentsWhenHostAppears() async throws {
         let harness = DialogTestHarness(hasPresentationHost: false)
         let recorder = DialogTestRecorder<Bool>()
         harness.registry.register(BasicTestDialogViewModel.self) { _, notifier in
@@ -64,11 +64,24 @@ struct DialogCallContextTests {
             return view
         }
 
-        await #expect(throws: DialogError.presentationHostUnavailable) {
-            _ = try await harness.dialogs.show(BasicTestDialogViewModel(message: "こんにちは"))
-        }
-        #expect(recorder.createdViews.isEmpty)
+        let showTask = Task { try await harness.dialogs.show(BasicTestDialogViewModel(message: "こんにちは")) }
+        try #require(
+            await DialogTestWaiting.waitUntil { harness.presentationSurface.hostWaitQueue.waitingCount == 1 },
+            "show は失敗も完了もせず、提示先を待つ列に並ぶ"
+        )
+        #expect(recorder.createdViews.isEmpty, "提示先が無い間は View factory が呼ばれない")
         #expect(harness.presentedContainers.isEmpty)
+
+        harness.presentationSurface.isPresentationHostAvailable = true
+        harness.presentationSurface.fireHostAppearance()
+
+        let notifier = try await recorder.notifier(at: 0)
+        try #require(await harness.waitForPresentedContainers(count: 1), "提示先が現れた時点で表示される")
+        #expect(recorder.createdViews.count == 1)
+        notifier.complete(true)
+
+        #expect(try await showTask.value == .completed(true))
+        #expect(harness.presentationSurface.hostAppearance.activeRegistrationCount == 0, "表示したら購読を解除する")
     }
 }
 #endif

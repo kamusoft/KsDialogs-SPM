@@ -10,10 +10,13 @@ enum DialogLayoutResolver {
     ///   - layout: 丸め済みのレイアウト属性
     ///   - bounds: ウィンドウの矩形 (原点は左上)
     ///   - visibleAreaInsets: ウィンドウから可視領域を狭めるシステム領域の幅
+    ///   - currentPageInsets: ウィンドウから表示中のページの基準矩形を切り出す4辺の幅。
+    ///     ページが得られなかったときは nil で、基準は可視領域に落ちる
     static func resolve(
         layout: DialogLayout,
         bounds: CGRect,
-        visibleAreaInsets: DialogEdgeInsets
+        visibleAreaInsets: DialogEdgeInsets,
+        currentPageInsets: DialogEdgeInsets? = nil
     ) -> (horizontal: DialogAxisLayout, vertical: DialogAxisLayout) {
         let insets: DialogEdgeInsets
         switch layout.layoutArea {
@@ -21,6 +24,8 @@ enum DialogLayoutResolver {
             insets = .zero
         case .visibleArea:
             insets = visibleAreaInsets
+        case .currentPage:
+            insets = currentPageInsets ?? visibleAreaInsets
         }
 
         let horizontal = resolveAxis(

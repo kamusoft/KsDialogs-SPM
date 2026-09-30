@@ -255,9 +255,9 @@ struct DialogAttributeSupplyTests {
             insets: Self.insets
         )
 
-        // 比率は 幅 = 非有限で未指定 / 高さ = 1 へ丸め、余白は 上 = 負で 0 / 左 = 非有限で既定 24、
-        // Offset は非有限で 0。水平は有効領域 (24〜400) の中央、垂直は基準 rect いっぱいになる。
-        DialogRectExpectation.expect(actual, equals: CGRect(x: 72, y: 0, width: 280, height: 800))
+        // 比率は 幅 = 非有限で未指定 / 高さ = 1 へ丸め、余白は 上 = 負で 0 / 左 = 非有限で既定値の 0、
+        // Offset は非有限で 0。水平は有効領域 (0〜400) の中央、垂直は基準 rect いっぱいになる。
+        DialogRectExpectation.expect(actual, equals: CGRect(x: 60, y: 0, width: 280, height: 800))
     }
 }
 #endif

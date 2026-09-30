@@ -28,7 +28,11 @@ public final class Dialog: KsDialog {
         kmp = KsDialogsKmp(registry: registry, presentationSurface: presentationSurface)
     }
 
-    public func show<ViewModel: DialogViewModel>(
+    // show 群は呼び出し元の実行文脈のまま走らせる (nonisolated(nonsending))。既定の非隔離 async に
+    // すると、呼び出しはいったん大域の実行器へ移ってから MainActor の提示処理へ戻るため、UI スレッドから
+    // 続けて呼んだ show でも戻る順が入れ替わり、待ちの列に呼んだ順で並ばなくなる (core/ADR-0041)。
+    // プロトコル経由の呼び出しでも同じ順を保つため、`KsDialog` の要件と拡張も同じ指定にそろえる (ios/ADR-0001)。
+    nonisolated(nonsending) public func show<ViewModel: DialogViewModel>(
         _ viewModel: ViewModel,
         placement: DialogPlacement? = nil
     ) async throws -> DialogResult<ViewModel.Result> {
@@ -41,7 +45,7 @@ public final class Dialog: KsDialog {
         return try Self.restoreResult(outcome, for: ViewModel.self)
     }
 
-    public func show<ViewModel: DialogViewModel>(
+    nonisolated(nonsending) public func show<ViewModel: DialogViewModel>(
         _ viewModel: ViewModel,
         placement: DialogPlacement? = nil,
         factory: @escaping @MainActor @Sendable (ViewModel, DialogNotifier<ViewModel.Result>) throws -> UIView
@@ -53,7 +57,7 @@ public final class Dialog: KsDialog {
         )
     }
 
-    public func show<ViewModel: DialogViewModel, Content: View>(
+    nonisolated(nonsending) public func show<ViewModel: DialogViewModel, Content: View>(
         _ viewModel: ViewModel,
         placement: DialogPlacement? = nil,
         @ViewBuilder factory: @escaping @MainActor @Sendable (ViewModel, DialogNotifier<ViewModel.Result>) throws -> Content
@@ -65,7 +69,7 @@ public final class Dialog: KsDialog {
         )
     }
 
-    public func show<ViewModel: DialogViewModel>(
+    nonisolated(nonsending) public func show<ViewModel: DialogViewModel>(
         _ viewModelType: ViewModel.Type,
         placement: DialogPlacement? = nil,
         configure: (@MainActor @Sendable (ViewModel) async throws -> Void)? = nil
@@ -112,8 +116,38 @@ public final class Dialog: KsDialog {
         return viewModel
     }
 
+    /// 表示の順番を、呼び出しの時点で同期で予約する。任意のスレッドから呼べる。
+    ///
+    /// UI スレッドへ移ってから show を呼ぶ呼び出し口 (Task を作って移るもの) のための口で、
+    /// 移る前にこれを呼び、移った先で `show(_:placement:reservation:)` に渡す。
+    /// 移った先の処理が始まる順に関係なく、予約した順に表示を待つ列へ並ぶ。
+    /// 使わずに捨てた予約は、解放された時点で手放され、後ろの show を止め続けない。
+    @_spi(KsDialogsBridge)
+    public func reserveShow() -> DialogShowReservation {
+        DialogShowReservation(DialogPresenter.reserveTurn(on: presentationSurface))
+    }
+
+    /// `reserveShow()` で取った予約の順番で、ViewModel を渡してダイアログを表示し、結果を待つ。
+    ///
+    /// 予約以外の振る舞いは `show(_:placement:)` と同じ。予約は 1 回の show にだけ使える。
+    @_spi(KsDialogsBridge)
+    nonisolated(nonsending) public func show<ViewModel: DialogViewModel>(
+        _ viewModel: ViewModel,
+        placement: DialogPlacement? = nil,
+        reservation: DialogShowReservation
+    ) async throws -> DialogResult<ViewModel.Result> {
+        let outcome = try await DialogPresenter.present(
+            viewModel: viewModel,
+            registry: registry,
+            presentationSurface: presentationSurface,
+            placement: placement,
+            reservation: reservation.turn
+        )
+        return try Self.restoreResult(outcome, for: ViewModel.self)
+    }
+
     /// 型消去した factory をそのまま提示層へ渡す。レジストリは経由しない (core/ADR-0013)。
-    private func showInline<ViewModel: DialogViewModel>(
+    nonisolated(nonsending) private func showInline<ViewModel: DialogViewModel>(
         _ viewModel: ViewModel,
         placement: DialogPlacement?,
         factory: DialogViewFactory

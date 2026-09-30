@@ -63,10 +63,156 @@ struct UIKitDialogPresentationSurfaceTests {
             resultChannel: DialogResultChannel()
         )
 
-        surface.present(container)
+        surface.present(container) { _ in }
 
         #expect(rootViewController.presentedViewController === container)
         #expect(container.modalPresentationStyle == .overFullScreen)
+    }
+
+    /// 提示の完了通知を届いた順に書き留める。
+    @MainActor
+    private final class PresentationObservation {
+        private(set) var results: [Bool] = []
+
+        func record(_ didPresent: Bool) {
+            results.append(didPresent)
+        }
+    }
+
+    @Test("受け付けられた提示は、この呼び出しの中で載せられなかったとは知らせない")
+    func acceptedPresentationIsNotReportedAsFailure() {
+        let (window, rootViewController) = makeWindow()
+        defer { window.isHidden = true }
+        let surface = UIKitDialogPresentationSurface(
+            keyWindowProvider: DialogTestKeyWindowProvider(keyWindow: window)
+        )
+        let container = DialogContainerViewController(
+            contentView: DialogTestContentView(),
+            resultChannel: DialogResultChannel()
+        )
+        let observation = PresentationObservation()
+
+        surface.present(container) { observation.record($0) }
+
+        #expect(rootViewController.presentedViewController === container, "提示関係は呼び出しの中で結ばれる")
+        #expect(!observation.results.contains(false), "載せられなかったとは知らせない")
+    }
+
+    @Test("提示機構が提示を受け付けないと、載せられなかったとちょうど 1 回知らせる")
+    func refusedPresentationIsReportedOnce() {
+        let (window, rootViewController) = makeWindow()
+        defer { window.isHidden = true }
+        // 提示元の View が画面の階層に無いと、提示機構は提示を受け付けず完了通知も届けない。
+        rootViewController.view.removeFromSuperview()
+        let surface = UIKitDialogPresentationSurface(
+            keyWindowProvider: DialogTestKeyWindowProvider(keyWindow: window)
+        )
+        let container = DialogContainerViewController(
+            contentView: DialogTestContentView(),
+            resultChannel: DialogResultChannel()
+        )
+        let observation = PresentationObservation()
+
+        surface.present(container) { observation.record($0) }
+
+        #expect(container.presentingViewController == nil, "提示機構は提示を受け付けていない")
+        #expect(rootViewController.transitionCoordinator == nil, "持ち越す遷移は無い")
+        #expect(observation.results == [false], "載せられなかったことが呼び出しの中でちょうど 1 回届く")
+    }
+
+    @Test("提示元の遷移の最中の提示は持ち越されるので、その場では載せられなかったと知らせない")
+    func presentationDeferredByTransitionIsNotReportedImmediately() throws {
+        let (window, rootViewController) = makeWindow()
+        defer { window.isHidden = true }
+        // 閉じる途中の画面を提示中の提示元。提示遷移はテスト実行環境では完走しないので、遷移の最中が続く。
+        rootViewController.present(BeingDismissedViewController(), animated: false)
+        try #require(rootViewController.transitionCoordinator != nil, "提示元は遷移の最中にある")
+        let surface = UIKitDialogPresentationSurface(
+            keyWindowProvider: DialogTestKeyWindowProvider(keyWindow: window)
+        )
+        let container = DialogContainerViewController(
+            contentView: DialogTestContentView(),
+            resultChannel: DialogResultChannel()
+        )
+        let observation = PresentationObservation()
+
+        #expect(surface.topmostViewController() === rootViewController, "閉じる途中の画面の手前が提示先に選ばれる")
+        surface.present(container) { observation.record($0) }
+
+        #expect(container.presentingViewController == nil, "提示は遷移の終わりまで持ち越されている")
+        #expect(observation.results.isEmpty, "結べるかは遷移の終わりに決まるので、まだ知らせない")
+    }
+
+    @Test("遷移の完了を見張れず提示関係も結ばれていなければ、その場で載せられなかったとちょうど 1 回知らせる")
+    func unobservableTransitionWithoutBindingIsReportedOnce() throws {
+        let (window, rootViewController) = makeWindow()
+        defer { window.isHidden = true }
+        // 閉じる途中の画面を提示中の提示元。提示は遷移の終わりまで持ち越され、呼び出しの中では結ばれない。
+        rootViewController.present(BeingDismissedViewController(), animated: false)
+        try #require(rootViewController.transitionCoordinator != nil, "提示元は遷移の最中にある")
+        // 遷移の完了の見張りを登録できない提示機構 (登録を差し替えて再現する)。
+        let registrations = DialogTestCallCounter()
+        let surface = UIKitDialogPresentationSurface(
+            keyWindowProvider: DialogTestKeyWindowProvider(keyWindow: window),
+            observeTransitionCompletion: { _, _ in
+                registrations.increment()
+                return false
+            }
+        )
+        let container = DialogContainerViewController(
+            contentView: DialogTestContentView(),
+            resultChannel: DialogResultChannel()
+        )
+        let observation = PresentationObservation()
+
+        surface.present(container) { observation.record($0) }
+
+        #expect(registrations.count == 1, "遷移の完了の見張りの登録を試みている")
+        #expect(container.presentingViewController == nil, "提示関係は結ばれていない")
+        #expect(observation.results == [false], "見張れないので、その場でちょうど 1 回知らせる")
+    }
+
+    @Test("載せられなかったと知らせた後に提示が遅れて結ばれると、器を画面から外し、知らせは変えない")
+    func lateBoundPresentationAfterFailureIsDismissed() {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let presenting = LateBindingPresentingViewController()
+        window.rootViewController = presenting
+        window.isHidden = false
+        defer { window.isHidden = true }
+        let surface = UIKitDialogPresentationSurface(
+            keyWindowProvider: DialogTestKeyWindowProvider(keyWindow: window)
+        )
+        let container = DialogContainerViewController(
+            contentView: DialogTestContentView(),
+            resultChannel: DialogResultChannel()
+        )
+        let observation = PresentationObservation()
+
+        surface.present(container) { observation.record($0) }
+        #expect(observation.results == [false], "提示関係も遷移も無いので、載せられなかったと知らせる")
+
+        // 提示機構が遅れて提示を結び、完了通知を流す。
+        presenting.bindHeldPresentation()
+
+        // 閉鎖の遷移はテストランナーでは完走しないため、提示元へ閉鎖が依頼されたことで見る。
+        #expect(presenting.dismissalRequests == [false], "遅れて結ばれた器を、アニメーションなしで閉じる")
+        #expect(observation.results == [false], "知らせは載せられなかったのまま変わらない")
+    }
+
+    @Test("提示先が無いと、載せられなかったとちょうど 1 回知らせる")
+    func missingHostIsReportedOnce() {
+        let surface = UIKitDialogPresentationSurface(
+            keyWindowProvider: DialogTestKeyWindowProvider(keyWindow: nil)
+        )
+        let container = DialogContainerViewController(
+            contentView: DialogTestContentView(),
+            resultChannel: DialogResultChannel()
+        )
+        let observation = PresentationObservation()
+
+        surface.present(container) { observation.record($0) }
+
+        #expect(observation.results == [false])
     }
 
     /// 閉鎖の完了通知が届いたかどうかを書き留める。
@@ -121,7 +267,7 @@ struct UIKitDialogPresentationSurfaceTests {
             contentView: DialogTestContentView(),
             resultChannel: DialogResultChannel()
         )
-        surface.present(container)
+        surface.present(container) { _ in }
         try #require(container.presentingViewController === presenting)
 
         let observation = DismissalObservation()

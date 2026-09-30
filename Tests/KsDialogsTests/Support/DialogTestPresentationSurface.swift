@@ -7,7 +7,9 @@ import UIKit
 /// UIKit の提示遷移はテスト実行環境 (シーンを持たないテストランナー) では完走しないため、
 /// 器の重なりだけをこの面で観察する。UIKit 実装との対応は次のとおり:
 ///
-/// - `present` は最前面への提示に対応し、器を重なりの一番上へ積んでウィンドウに載せる
+/// - `present` は最前面への提示に対応し、器を重なりの一番上へ積んでウィンドウに載せる。
+///   提示の完了はその場で知らせる。`holdsPresentationCompletion` を立てると
+///   「提示は始まったがまだ終わっていない」状態を作れる
 /// - `dismiss` は提示元からの閉鎖に対応し、その器と、その上に重なっている器を一緒に外す
 ///   (UIKit の dismiss は、提示した ViewController より手前のものもまとめて閉じる)。
 ///   実際に外れ終わった時点で完了を知らせるところまでが対応関係で、
@@ -51,13 +53,60 @@ final class DialogTestPresentationSurface: DialogPresentationSurface {
         isPresentationHostAvailable
     }
 
-    func present(_ container: DialogContainerViewController) {
+    /// 提示先の出現の合図の発火口。`fireHostAppearance()` で合図を送る。
+    let hostAppearance = DialogTestHostAppearanceSignal()
+
+    func observeHostAppearance(
+        _ handler: @escaping DialogHostAppearanceHandler
+    ) -> DialogHostAppearanceRegistration {
+        hostAppearance.observe(handler)
+    }
+
+    /// 提示先の出現の合図を送る (本番の window の key 化・シーンのアクティブ化に対応する)。
+    func fireHostAppearance() {
+        hostAppearance.fire()
+    }
+
+    /// 提示先を待つ show の列。テストどうしが干渉しないよう、面ごとに持つ。
+    let hostWaitQueue = DialogHostWaitQueue()
+
+    /// true の間は提示の完了を知らせず、溜める。
+    var holdsPresentationCompletion = false
+
+    /// 知らせるのを保留している提示の完了。
+    private var heldPresentationCompletions: [DialogPresentationCompletion] = []
+
+    /// 完了を保留している提示の数。
+    var heldPresentationCompletionCount: Int {
+        heldPresentationCompletions.count
+    }
+
+    /// 保留していた提示の完了をまとめて知らせる。
+    func completeHeldPresentations() {
+        holdsPresentationCompletion = false
+        let pending = heldPresentationCompletions
+        heldPresentationCompletions = []
+        for completion in pending {
+            completion(true)
+        }
+    }
+
+    func present(
+        _ container: DialogContainerViewController,
+        completion: @escaping DialogPresentationCompletion
+    ) {
         presentedContainers.append(container)
         // 器の View 階層 (覆い・中身の配置) を実際に組み立てる。
         container.loadViewIfNeeded()
         contentFramesAtPresentation.append(container.contentView.frame)
-        guard !holdsWindowAttachment else { return }
-        attach(container)
+        if !holdsWindowAttachment {
+            attach(container)
+        }
+        if holdsPresentationCompletion {
+            heldPresentationCompletions.append(completion)
+        } else {
+            completion(true)
+        }
     }
 
     /// 器をウィンドウに載せ、画面上での初回レイアウトパスをその場で走らせる。
