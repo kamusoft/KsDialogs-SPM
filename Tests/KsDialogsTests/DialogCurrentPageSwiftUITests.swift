@@ -45,6 +45,35 @@ struct DialogCurrentPageSwiftUITests {
         return nil
     }
 
+    /// タブバーとナビゲーションバーの枠 (ウィンドウ座標) を、値が変わらなくなるまで待ってから返す。
+    ///
+    /// SwiftUI の `NavigationStack` は、中身の safe area が inline 表示の高さで決まった時点でも、
+    /// バー自身の枠をまだ大きいタイトルの高さのまま残していることがある (iOS 27 の実測で 54 に対し 106。
+    /// 次のレイアウトパスで 54 になり、106 の枠は一度も描画されない)。台帳に候補が載った直後の
+    /// 1 回の読みではこの途中の枠を拾うため、レイアウトを進めながら同じ値が続くまで待つ。
+    private func settledBarFrames(
+        tabBar: UITabBar,
+        navigationBar: UINavigationBar,
+        in window: UIWindow
+    ) async throws -> (tabBar: CGRect, navigationBar: CGRect) {
+        var frames = (tabBar: CGRect.null, navigationBar: CGRect.null)
+        let outcome = await DialogTestWaiting.awaitSettled {
+            window.layoutIfNeeded()
+            let current = (
+                tabBar: tabBar.convert(tabBar.bounds, to: nil),
+                navigationBar: navigationBar.convert(navigationBar.bounds, to: nil)
+            )
+            let unchanged = current == frames
+            frames = current
+            return DialogTestWaiting.Reading(
+                settled: unchanged,
+                "タブバー \(current.tabBar) / ナビゲーションバー \(current.navigationBar)"
+            )
+        }
+        try #require(outcome.settled, outcome.message("バーの枠が落ち着かない"))
+        return frames
+    }
+
     @Test("SwiftUI の TabView + NavigationStack で content 枠の modifier が基準になり、タブバーとナビゲーションバーを避ける")
     func swiftUITabViewAndNavigationStackUseModifier() async throws {
         let window = Stage.makeWindow(
@@ -57,8 +86,9 @@ struct DialogCurrentPageSwiftUITests {
             firstSubview(of: UINavigationBar.self, in: window),
             "NavigationStack のナビゲーションバーが見つからない"
         )
-        let tabBarTop = tabBar.convert(tabBar.bounds, to: nil).minY
-        let navigationBarBottom = navigationBar.convert(navigationBar.bounds, to: nil).maxY
+        let bars = try await settledBarFrames(tabBar: tabBar, navigationBar: navigationBar, in: window)
+        let tabBarTop = bars.tabBar.minY
+        let navigationBarBottom = bars.navigationBar.maxY
 
         let endEnd = Stage.showDialog(in: window, placement: Stage.endEnd)
         #expect(
