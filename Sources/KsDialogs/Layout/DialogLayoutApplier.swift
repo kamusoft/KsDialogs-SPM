@@ -90,6 +90,7 @@ final class DialogLayoutApplier {
         contentHeightConstraint = nil
         appliedLayoutInput = nil
         let solution = layoutSolution(for: layout, in: containerView)
+        relaySafeArea(for: layout, solution: solution)
         var constraints: [NSLayoutConstraint] = []
 
         if solution.horizontal.size != nil {
@@ -258,6 +259,36 @@ final class DialogLayoutApplier {
             return contentView.centerYAnchor.constraint(equalTo: containerView.topAnchor)
         case .trailingEdge:
             return contentView.bottomAnchor.constraint(equalTo: containerView.topAnchor)
+        }
+    }
+
+    /// 安全領域を受け取れる中身へ、重なりを渡す軸を伝える。
+    ///
+    /// 渡すのは基準領域が窓全体で、位置が端に固定される軸だけにする。窓全体以外の基準領域では
+    /// 器がすでにシステムの領域を避けて置かれているため、移動量で重なっても渡さない。
+    /// 位置の固定のしかたは配置・比率サイズだけで決まり、ウィンドウの寸法では変わらないので、
+    /// 制約を張り直すときに決めれば足りる。
+    private func relaySafeArea(
+        for layout: DialogLayout,
+        solution: (horizontal: DialogAxisLayout, vertical: DialogAxisLayout)
+    ) {
+        guard let relay = contentView as? any DialogContentSafeAreaRelay else { return }
+        relay.relaySafeArea(
+            horizontal: Self.relaysSafeArea(along: solution.horizontal.position, layoutArea: layout.layoutArea),
+            vertical: Self.relaysSafeArea(along: solution.vertical.position, layoutArea: layout.layoutArea)
+        )
+    }
+
+    private static func relaysSafeArea(
+        along position: DialogAxisLayout.Position,
+        layoutArea: DialogLayoutArea
+    ) -> Bool {
+        guard layoutArea == .window else { return false }
+        switch position {
+        case .leadingEdge, .trailingEdge:
+            return true
+        case .center:
+            return false
         }
     }
 

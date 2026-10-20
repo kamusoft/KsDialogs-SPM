@@ -14,6 +14,19 @@ import UIKit
 ///         ConfirmContent(message: viewModel.message, notifier: notifier)
 ///     }
 ///     let result = try await Dialog.shared.kmp.show(SharedConfirmViewModel(message: "削除しますか?"))
+///
+/// 共有コードの ViewModel が Kotlin の整数型を結果型にしているときは、Swift から見える次の型を `result:` に渡す。
+///
+/// | Kotlin | Swift |
+/// |---|---|
+/// | `Int` | `Int32` |
+/// | `Long` | `Int64` |
+/// | `UInt` | `UInt32` |
+/// | `ULong` | `UInt64` |
+///
+/// Swift の `Int` / `UInt` はどの Kotlin の整数型とも対応しない。`result:` に渡すとコンパイル時に
+/// 非推奨の警告が出て、show と `notifier(for:result:)` は `KsDialogsKmpError.resultTypeMismatch` で失敗する。
+/// 登録はそのまま受け付ける。
 public final class KsDialogsKmp: Sendable {
     private let registry: DialogViewRegistry
     private let bridge: KsDialogsInteropBridge
@@ -50,10 +63,41 @@ public final class KsDialogsKmp: Sendable {
         result: Result.Type,
         factory: @escaping @MainActor @Sendable (ViewModel, DialogNotifier<Result>) -> UIView
     ) {
-        registry.register(
-            DialogViewFactory.make(viewModelClass, result: result, factory: factory),
-            forKey: DialogViewModelKey(viewModelClass)
-        )
+        store(DialogViewFactory.make(viewModelClass, result: result, factory: factory), for: viewModelClass)
+    }
+
+    /// Swift の `Int` を結果型にした登録。Kotlin の整数型と対応しないため非推奨。
+    ///
+    /// 登録はそのまま行われるが、この共有 VM の show は `KsDialogsKmpError.resultTypeMismatch` で失敗する。
+    /// Kotlin の `Int` には `Int32`、`Long` には `Int64` を使う。
+    @available(
+        *,
+        deprecated,
+        message: "Swift Int does not correspond to a Kotlin integer type. Use Int32 for Kotlin Int or Int64 for Kotlin Long. show and notifier(for:result:) throw KsDialogsKmpError.resultTypeMismatch for Int."
+    )
+    public func register<ViewModel: AnyObject>(
+        _ viewModelClass: ViewModel.Type,
+        result: Int.Type,
+        factory: @escaping @MainActor @Sendable (ViewModel, DialogNotifier<Int>) -> UIView
+    ) {
+        store(DialogViewFactory.make(viewModelClass, result: result, factory: factory), for: viewModelClass)
+    }
+
+    /// Swift の `UInt` を結果型にした登録。Kotlin の整数型と対応しないため非推奨。
+    ///
+    /// 登録はそのまま行われるが、この共有 VM の show は `KsDialogsKmpError.resultTypeMismatch` で失敗する。
+    /// Kotlin の `UInt` には `UInt32`、`ULong` には `UInt64` を使う。
+    @available(
+        *,
+        deprecated,
+        message: "Swift UInt does not correspond to a Kotlin integer type. Use UInt32 for Kotlin UInt or UInt64 for Kotlin ULong. show and notifier(for:result:) throw KsDialogsKmpError.resultTypeMismatch for UInt."
+    )
+    public func register<ViewModel: AnyObject>(
+        _ viewModelClass: ViewModel.Type,
+        result: UInt.Type,
+        factory: @escaping @MainActor @Sendable (ViewModel, DialogNotifier<UInt>) -> UIView
+    ) {
+        store(DialogViewFactory.make(viewModelClass, result: result, factory: factory), for: viewModelClass)
     }
 
     /// 共有 VM の型に対する SwiftUI の中身の factory を登録する。結果型は真偽値になる。
@@ -74,10 +118,41 @@ public final class KsDialogsKmp: Sendable {
         result: Result.Type,
         @ViewBuilder factory: @escaping @MainActor @Sendable (ViewModel, DialogNotifier<Result>) -> Content
     ) {
-        registry.register(
-            DialogViewFactory.make(viewModelClass, result: result, factory: factory),
-            forKey: DialogViewModelKey(viewModelClass)
-        )
+        store(DialogViewFactory.make(viewModelClass, result: result, factory: factory), for: viewModelClass)
+    }
+
+    /// Swift の `Int` を結果型にした SwiftUI の中身の登録。Kotlin の整数型と対応しないため非推奨。
+    ///
+    /// 登録はそのまま行われるが、この共有 VM の show は `KsDialogsKmpError.resultTypeMismatch` で失敗する。
+    /// Kotlin の `Int` には `Int32`、`Long` には `Int64` を使う。
+    @available(
+        *,
+        deprecated,
+        message: "Swift Int does not correspond to a Kotlin integer type. Use Int32 for Kotlin Int or Int64 for Kotlin Long. show and notifier(for:result:) throw KsDialogsKmpError.resultTypeMismatch for Int."
+    )
+    public func register<ViewModel: AnyObject, Content: View>(
+        _ viewModelClass: ViewModel.Type,
+        result: Int.Type,
+        @ViewBuilder factory: @escaping @MainActor @Sendable (ViewModel, DialogNotifier<Int>) -> Content
+    ) {
+        store(DialogViewFactory.make(viewModelClass, result: result, factory: factory), for: viewModelClass)
+    }
+
+    /// Swift の `UInt` を結果型にした SwiftUI の中身の登録。Kotlin の整数型と対応しないため非推奨。
+    ///
+    /// 登録はそのまま行われるが、この共有 VM の show は `KsDialogsKmpError.resultTypeMismatch` で失敗する。
+    /// Kotlin の `UInt` には `UInt32`、`ULong` には `UInt64` を使う。
+    @available(
+        *,
+        deprecated,
+        message: "Swift UInt does not correspond to a Kotlin integer type. Use UInt32 for Kotlin UInt or UInt64 for Kotlin ULong. show and notifier(for:result:) throw KsDialogsKmpError.resultTypeMismatch for UInt."
+    )
+    public func register<ViewModel: AnyObject, Content: View>(
+        _ viewModelClass: ViewModel.Type,
+        result: UInt.Type,
+        @ViewBuilder factory: @escaping @MainActor @Sendable (ViewModel, DialogNotifier<UInt>) -> Content
+    ) {
+        store(DialogViewFactory.make(viewModelClass, result: result, factory: factory), for: viewModelClass)
     }
 
     /// 共有 VM の型に対する、ViewModel だけを受け取る View factory を登録する。結果型は真偽値になる。
@@ -97,10 +172,43 @@ public final class KsDialogsKmp: Sendable {
         result: Result.Type,
         factory: @escaping @MainActor @Sendable (ViewModel) -> UIView
     ) {
-        registry.register(
-            DialogViewFactory.make(viewModelClass, result: result, factory: factory),
-            forKey: DialogViewModelKey(viewModelClass)
-        )
+        store(DialogViewFactory.make(viewModelClass, result: result, factory: factory), for: viewModelClass)
+    }
+
+    /// Swift の `Int` を結果型にした、ViewModel だけを受け取る View factory の登録。
+    /// Kotlin の整数型と対応しないため非推奨。
+    ///
+    /// 登録はそのまま行われるが、この共有 VM の show は `KsDialogsKmpError.resultTypeMismatch` で失敗する。
+    /// Kotlin の `Int` には `Int32`、`Long` には `Int64` を使う。
+    @available(
+        *,
+        deprecated,
+        message: "Swift Int does not correspond to a Kotlin integer type. Use Int32 for Kotlin Int or Int64 for Kotlin Long. show and notifier(for:result:) throw KsDialogsKmpError.resultTypeMismatch for Int."
+    )
+    public func register<ViewModel: AnyObject>(
+        _ viewModelClass: ViewModel.Type,
+        result: Int.Type,
+        factory: @escaping @MainActor @Sendable (ViewModel) -> UIView
+    ) {
+        store(DialogViewFactory.make(viewModelClass, result: result, factory: factory), for: viewModelClass)
+    }
+
+    /// Swift の `UInt` を結果型にした、ViewModel だけを受け取る View factory の登録。
+    /// Kotlin の整数型と対応しないため非推奨。
+    ///
+    /// 登録はそのまま行われるが、この共有 VM の show は `KsDialogsKmpError.resultTypeMismatch` で失敗する。
+    /// Kotlin の `UInt` には `UInt32`、`ULong` には `UInt64` を使う。
+    @available(
+        *,
+        deprecated,
+        message: "Swift UInt does not correspond to a Kotlin integer type. Use UInt32 for Kotlin UInt or UInt64 for Kotlin ULong. show and notifier(for:result:) throw KsDialogsKmpError.resultTypeMismatch for UInt."
+    )
+    public func register<ViewModel: AnyObject>(
+        _ viewModelClass: ViewModel.Type,
+        result: UInt.Type,
+        factory: @escaping @MainActor @Sendable (ViewModel) -> UIView
+    ) {
+        store(DialogViewFactory.make(viewModelClass, result: result, factory: factory), for: viewModelClass)
     }
 
     /// 共有 VM の型に対する、ViewModel だけを受け取る SwiftUI の中身の factory を登録する。
@@ -118,10 +226,51 @@ public final class KsDialogsKmp: Sendable {
         result: Result.Type,
         @ViewBuilder factory: @escaping @MainActor @Sendable (ViewModel) -> Content
     ) {
-        registry.register(
-            DialogViewFactory.make(viewModelClass, result: result, factory: factory),
-            forKey: DialogViewModelKey(viewModelClass)
-        )
+        store(DialogViewFactory.make(viewModelClass, result: result, factory: factory), for: viewModelClass)
+    }
+
+    /// Swift の `Int` を結果型にした、ViewModel だけを受け取る SwiftUI の中身の登録。
+    /// Kotlin の整数型と対応しないため非推奨。
+    ///
+    /// 登録はそのまま行われるが、この共有 VM の show は `KsDialogsKmpError.resultTypeMismatch` で失敗する。
+    /// Kotlin の `Int` には `Int32`、`Long` には `Int64` を使う。
+    @available(
+        *,
+        deprecated,
+        message: "Swift Int does not correspond to a Kotlin integer type. Use Int32 for Kotlin Int or Int64 for Kotlin Long. show and notifier(for:result:) throw KsDialogsKmpError.resultTypeMismatch for Int."
+    )
+    public func register<ViewModel: AnyObject, Content: View>(
+        _ viewModelClass: ViewModel.Type,
+        result: Int.Type,
+        @ViewBuilder factory: @escaping @MainActor @Sendable (ViewModel) -> Content
+    ) {
+        store(DialogViewFactory.make(viewModelClass, result: result, factory: factory), for: viewModelClass)
+    }
+
+    /// Swift の `UInt` を結果型にした、ViewModel だけを受け取る SwiftUI の中身の登録。
+    /// Kotlin の整数型と対応しないため非推奨。
+    ///
+    /// 登録はそのまま行われるが、この共有 VM の show は `KsDialogsKmpError.resultTypeMismatch` で失敗する。
+    /// Kotlin の `UInt` には `UInt32`、`ULong` には `UInt64` を使う。
+    @available(
+        *,
+        deprecated,
+        message: "Swift UInt does not correspond to a Kotlin integer type. Use UInt32 for Kotlin UInt or UInt64 for Kotlin ULong. show and notifier(for:result:) throw KsDialogsKmpError.resultTypeMismatch for UInt."
+    )
+    public func register<ViewModel: AnyObject, Content: View>(
+        _ viewModelClass: ViewModel.Type,
+        result: UInt.Type,
+        @ViewBuilder factory: @escaping @MainActor @Sendable (ViewModel) -> Content
+    ) {
+        store(DialogViewFactory.make(viewModelClass, result: result, factory: factory), for: viewModelClass)
+    }
+
+    /// 型消去した View factory を共有 VM の型に紐付けて登録する。
+    ///
+    /// 結果型ごとの入口はすべてここへ委ねる。非推奨の入口から同名の公開入口を呼び直すと、
+    /// 同じ非推奨の入口が選ばれて自分自身を呼び続けるため、委ね先は名前の違うこの実装にしてある。
+    private func store<ViewModel: AnyObject>(_ factory: DialogViewFactory, for viewModelClass: ViewModel.Type) {
+        registry.register(factory, forKey: DialogViewModelKey(viewModelClass))
     }
 
     // MARK: 結果報告口
@@ -151,10 +300,57 @@ public final class KsDialogsKmp: Sendable {
     /// 判定は表示中かどうかより先に行うので、show の前でも失敗として報告される。
     /// 表示中の判定に使う結果型は、その show を始めた時点の登録で固定される。
     /// 表示中に同じ VM 型を別の結果型で登録し直しても、出ているダイアログの報告口は元の型で引ける。
+    ///
+    /// `result:` に Swift の `Int` / `UInt` を渡した場合は、表示中かどうかや登録時の結果型によらず
+    /// `KsDialogsKmpError.resultTypeMismatch` になる。`expected` には使うべき型が入る。
     public func notifier<ViewModel: AnyObject, Result: Sendable>(
         for viewModel: ViewModel,
         result: Result.Type
     ) throws -> DialogNotifier<Result>? {
+        try boundNotifier(for: viewModel, result: result)
+    }
+
+    /// Swift の `Int` を結果型にした結果報告口の取り出し。Kotlin の整数型と対応しないため非推奨。
+    ///
+    /// 常に `KsDialogsKmpError.resultTypeMismatch` を throw する。
+    /// Kotlin の `Int` には `Int32`、`Long` には `Int64` を使う。
+    @available(
+        *,
+        deprecated,
+        message: "Swift Int does not correspond to a Kotlin integer type. Use Int32 for Kotlin Int or Int64 for Kotlin Long. show and notifier(for:result:) throw KsDialogsKmpError.resultTypeMismatch for Int."
+    )
+    public func notifier<ViewModel: AnyObject>(
+        for viewModel: ViewModel,
+        result: Int.Type
+    ) throws -> DialogNotifier<Int>? {
+        try boundNotifier(for: viewModel, result: result)
+    }
+
+    /// Swift の `UInt` を結果型にした結果報告口の取り出し。Kotlin の整数型と対応しないため非推奨。
+    ///
+    /// 常に `KsDialogsKmpError.resultTypeMismatch` を throw する。
+    /// Kotlin の `UInt` には `UInt32`、`ULong` には `UInt64` を使う。
+    @available(
+        *,
+        deprecated,
+        message: "Swift UInt does not correspond to a Kotlin integer type. Use UInt32 for Kotlin UInt or UInt64 for Kotlin ULong. show and notifier(for:result:) throw KsDialogsKmpError.resultTypeMismatch for UInt."
+    )
+    public func notifier<ViewModel: AnyObject>(
+        for viewModel: ViewModel,
+        result: UInt.Type
+    ) throws -> DialogNotifier<UInt>? {
+        try boundNotifier(for: viewModel, result: result)
+    }
+
+    /// 結果報告口の取り出しの本体。結果型ごとの入口はすべてここへ委ねる (委ね先を分ける理由は `store` と同じ)。
+    private func boundNotifier<ViewModel: AnyObject, Result: Sendable>(
+        for viewModel: ViewModel,
+        result: Result.Type
+    ) throws -> DialogNotifier<Result>? {
+        // Kotlin の整数型と対応しない型の指定は、表示中かどうかや登録の結果型より先に失敗させる。
+        if let failure = Self.kotlinIntegerMismatch(for: DialogDeclaredResultType(result)) {
+            throw failure
+        }
         let binding = DialogNotifierBindings.shared.binding(for: viewModel)
         // 表示中は show を始めた時点の結果型で判定し、表示していないときだけ現在の登録を見る。
         let declaredResultType = if let binding {
@@ -195,12 +391,72 @@ public final class KsDialogsKmp: Sendable {
     ///
     /// 待機を打ち切る (呼び出し元の Task をキャンセルする) と、この show のダイアログだけが閉じ、
     /// 結果は cancelled としてちょうど1回確定する。ほかに表示中のダイアログは影響を受けない。
+    ///
+    /// `result:` に Swift の `Int` / `UInt` を渡したとき、またはこの共有 VM の型が `Int` / `UInt` を
+    /// 結果型にして登録されているときは、ダイアログを表示せずに `KsDialogsKmpError.resultTypeMismatch` を
+    /// throw する。`expected` には使うべき型、`actual` には当たった型が入り、両方当たるときは
+    /// `result:` に渡した型で決まる。
     @MainActor
     public func show<ViewModel: AnyObject, Result: Sendable>(
         _ viewModel: ViewModel,
         result: Result.Type,
         placement: DialogPlacement? = nil
     ) async throws -> DialogResult<Result> {
+        try await presentTyped(viewModel, result: result, placement: placement)
+    }
+
+    /// Swift の `Int` を結果型にした show。Kotlin の整数型と対応しないため非推奨。
+    ///
+    /// ダイアログを表示せずに、常に `KsDialogsKmpError.resultTypeMismatch` を throw する。
+    /// Kotlin の `Int` には `Int32`、`Long` には `Int64` を使う。
+    @available(
+        *,
+        deprecated,
+        message: "Swift Int does not correspond to a Kotlin integer type. Use Int32 for Kotlin Int or Int64 for Kotlin Long. show and notifier(for:result:) throw KsDialogsKmpError.resultTypeMismatch for Int."
+    )
+    @MainActor
+    public func show<ViewModel: AnyObject>(
+        _ viewModel: ViewModel,
+        result: Int.Type,
+        placement: DialogPlacement? = nil
+    ) async throws -> DialogResult<Int> {
+        try await presentTyped(viewModel, result: result, placement: placement)
+    }
+
+    /// Swift の `UInt` を結果型にした show。Kotlin の整数型と対応しないため非推奨。
+    ///
+    /// ダイアログを表示せずに、常に `KsDialogsKmpError.resultTypeMismatch` を throw する。
+    /// Kotlin の `UInt` には `UInt32`、`ULong` には `UInt64` を使う。
+    @available(
+        *,
+        deprecated,
+        message: "Swift UInt does not correspond to a Kotlin integer type. Use UInt32 for Kotlin UInt or UInt64 for Kotlin ULong. show and notifier(for:result:) throw KsDialogsKmpError.resultTypeMismatch for UInt."
+    )
+    @MainActor
+    public func show<ViewModel: AnyObject>(
+        _ viewModel: ViewModel,
+        result: UInt.Type,
+        placement: DialogPlacement? = nil
+    ) async throws -> DialogResult<UInt> {
+        try await presentTyped(viewModel, result: result, placement: placement)
+    }
+
+    /// 型付き show の本体。結果型ごとの入口はすべてここへ委ねる (委ね先を分ける理由は `store` と同じ)。
+    @MainActor
+    private func presentTyped<ViewModel: AnyObject, Result: Sendable>(
+        _ viewModel: ViewModel,
+        result: Result.Type,
+        placement: DialogPlacement?
+    ) async throws -> DialogResult<Result> {
+        // 指定した結果型を先に見て、当たらなければ show を呼んだ時点の登録の結果型を見る。
+        // show のあと表示までの間の再登録は、結果を復元する時点の照合に任せる。
+        let registeredResultType = registry
+            .factory(forKey: DialogViewModelKey(type(of: viewModel)))?
+            .declaredResultType
+        if let failure = Self.kotlinIntegerMismatch(for: DialogDeclaredResultType(result))
+            ?? registeredResultType.flatMap(Self.kotlinIntegerMismatch(for:)) {
+            throw failure
+        }
         let interopResult = await present(viewModel, placement: placement)
         switch interopResult.kind {
         case .completed:
@@ -238,6 +494,20 @@ public final class KsDialogsKmp: Sendable {
             cancellation.cancel()
         }
         return boxedResult.value
+    }
+
+    // MARK: Kotlin の整数型との対応
+
+    /// Kotlin の整数型と対応しない Swift の整数型 (`Int` / `UInt`) なら、使うべき型を添えた失敗を返す。
+    /// それ以外の型なら nil。判定は名前ではなく型そのもので行う。
+    private static func kotlinIntegerMismatch(for resultType: DialogDeclaredResultType) -> KsDialogsKmpError? {
+        if resultType == DialogDeclaredResultType(Int.self) {
+            return .resultTypeMismatch(expected: "Int32 or Int64", actual: "Int")
+        }
+        if resultType == DialogDeclaredResultType(UInt.self) {
+            return .resultTypeMismatch(expected: "UInt32 or UInt64", actual: "UInt")
+        }
+        return nil
     }
 
     /// 結果値の型の名前。値がなければその旨を返す。

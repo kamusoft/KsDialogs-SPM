@@ -97,18 +97,18 @@ struct KsDialogsKmpModelBindingTests {
         try #require(await harness.waitForPresentedContainers(count: 1))
 
         // 表示したまま、同じ共有 VM 型を別の結果型で登録し直す。
-        kmp.register(SharedTestDialogViewModel.self, result: Int.self) { _ in
-            KmpModelBindingTestContentView<Int>(notifier: nil)
+        kmp.register(SharedTestDialogViewModel.self, result: Int64.self) { _ in
+            KmpModelBindingTestContentView<Int64>(notifier: nil)
         }
 
         // 出ているダイアログの報告口は、show を始めた時点の結果型で引ける。
         let notifier = try #require(try kmp.notifier(for: viewModel, result: String.self))
         // あとから登録された結果型を指定しても、この表示の型とは食い違うので失敗になる。
-        #expect(throws: KsDialogsKmpError.resultTypeMismatch(expected: "Int", actual: "String")) {
-            _ = try kmp.notifier(for: viewModel, result: Int.self)
+        #expect(throws: KsDialogsKmpError.resultTypeMismatch(expected: "Int64", actual: "String")) {
+            _ = try kmp.notifier(for: viewModel, result: Int64.self)
         }
         // 表示していないインスタンスの判定は、現在の登録の結果型で行われる。
-        #expect(throws: KsDialogsKmpError.resultTypeMismatch(expected: "String", actual: "Int")) {
+        #expect(throws: KsDialogsKmpError.resultTypeMismatch(expected: "String", actual: "Int64")) {
             _ = try kmp.notifier(for: SharedTestDialogViewModel(message: "未表示"), result: String.self)
         }
 

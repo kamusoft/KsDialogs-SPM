@@ -13,6 +13,11 @@ public enum KsDialogsKmpError: Error, Equatable, Sendable {
     /// 共有 VM の型に対する View factory が登録されていない。
     case notRegistered(viewModelType: String)
     /// 結果値の型が、登録・show で指定した結果型 (省略時は真偽値) と一致しない。
+    ///
+    /// Kotlin の整数型と対応しない Swift の `Int` / `UInt` を結果型に指定したときもこの失敗になる。
+    /// show に指定したとき、show する共有 VM の型をその型で登録していたとき、`notifier(for:result:)` に
+    /// 指定したときが当たり、show はダイアログを表示しない。このとき `expected` には使うべき型
+    /// (`"Int32 or Int64"` / `"UInt32 or UInt64"`)、`actual` には当たった型 (`"Int"` / `"UInt"`) が入る。
     case resultTypeMismatch(expected: String, actual: String)
 }
 

@@ -11,19 +11,22 @@ enum DialogSwiftUIHost {
         let contentView = DialogSwiftUIContentView()
         let sink = DialogAttributeSupplySink()
         sink.contentView = contentView
+        let safeAreaEdges = DialogSwiftUISafeAreaEdges()
         let hostingController = UIHostingController(
-            rootView: DialogSwiftUIRoot(content: content, sink: sink)
+            rootView: DialogSwiftUIRoot(content: content, sink: sink, safeAreaEdges: safeAreaEdges)
         )
         // 器の覆いと中身の見えは中身自身が決めるため、ホスト側の地色は持たせない。
         hostingController.view.backgroundColor = .clear
-        // 中身が要求するサイズを内容サイズとして器へ伝える (core/ADR-0009 の共通ケース表の入力になる)。
-        hostingController.sizingOptions = [.intrinsicContentSize]
-        // システム領域の扱いは器のレイアウト規則が基準領域として持っているため、
-        // ホスト側で余白を足させない。足すと中身が要求するサイズがその分だけ膨らむ。
-        hostingController.safeAreaRegions = []
+        // 中身が求める大きさの変化を知らせさせる。器へ伝える要求サイズは、ホストを敷く
+        // `DialogSwiftUIContentView` がホストに問い合わせて求める (core/ADR-0009 の共通ケース表の入力になる)。
+        hostingController.sizingOptions = [.preferredContentSize]
+        // 中身へはシステムの領域 (ステータスバー・ホームインジケータ等) だけを標準の安全領域として渡し、
+        // キーボードの領域は渡さない。どの軸の重なりを渡すかと、受け取った安全領域を要求サイズから
+        // 引き戻すことは、ホストを敷く `DialogSwiftUIContentView` が受け持つ。
+        hostingController.safeAreaRegions = .container
         // ここで敷く先は器から切り離された包みであり、ホストの View が器の View 階層に入るのは
         // 器がこの包みを載せる時点になる。器はそれを child への組み込みのあと・出現通知の前に行う。
-        contentView.embed(hostingController.view)
+        contentView.embed(hostingController, safeAreaEdges: safeAreaEdges)
         return DialogContent(view: contentView, host: hostingController)
     }
 }
@@ -40,15 +43,18 @@ final class DialogAttributeSupplySink {
     }
 }
 
-/// 中身に添付値の受け取り口を重ねたホストのルート。
-private struct DialogSwiftUIRoot<Content: View>: View {
+/// 中身に添付値の受け取り口を重ね、器が重なりを渡さない辺の安全領域を無視させたホストのルート。
+struct DialogSwiftUIRoot<Content: View>: View {
     let content: Content
     let sink: DialogAttributeSupplySink
+    let safeAreaEdges: DialogSwiftUISafeAreaEdges
 
     var body: some View {
-        content.backgroundPreferenceValue(DialogAttributeAttachmentKey.self) { attachment in
-            DialogAttributeSupplyReader(sink: sink, attachment: attachment)
-        }
+        content
+            .backgroundPreferenceValue(DialogAttributeAttachmentKey.self) { attachment in
+                DialogAttributeSupplyReader(sink: sink, attachment: attachment)
+            }
+            .ignoresSafeArea(.container, edges: safeAreaEdges.ignored)
     }
 }
 
