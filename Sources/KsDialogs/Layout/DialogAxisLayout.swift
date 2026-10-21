@@ -32,5 +32,9 @@ struct DialogAxisLayout {
 
     /// 軸方向の位置。
     let position: Position
+
+    /// サイズを fill 配置で有効領域いっぱいに決めたか。fill の軸は位置も前端に固定されるため、
+    /// 前端に付けた (start の) 軸と見分けるのに使う。
+    let isFilled: Bool
 }
 #endif

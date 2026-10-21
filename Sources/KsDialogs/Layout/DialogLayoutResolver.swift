@@ -101,7 +101,8 @@ enum DialogLayoutResolver {
         return DialogAxisLayout(
             size: size.map { CGFloat(max(0, $0)) },
             maxSize: CGFloat(effectiveAreaLength),
-            position: position
+            position: position,
+            isFilled: isFilled
         )
     }
 }

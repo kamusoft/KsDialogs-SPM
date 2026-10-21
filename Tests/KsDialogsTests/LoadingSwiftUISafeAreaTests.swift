@@ -22,5 +22,29 @@ struct LoadingSwiftUISafeAreaTests {
 
         await record.expectLatestInsets(top: 59, bottom: 0, "Loading・上端")
     }
+
+    @Test("[PB-IS-26] 窓全体基準で下端に付けた縮まない Loading の中身は、器いっぱいに置かれる")
+    func PB_IS_26_loadingBottomRigidContentFillsContainer() async throws {
+        let band = SwiftUIDrawnFrameProbe()
+        let background = SwiftUIDrawnFrameProbe()
+        let stage = try await SwiftUIContainerStage.loading(
+            content: EdgeConfirmSwiftUIContent(handling: .respects, band: band, background: background),
+            showPlacement: DialogPlacement(horizontalAlignment: .fill, verticalAlignment: .end),
+            screen: DialogLayoutCase.Size(w: 393, h: 852),
+            insets: DialogLayoutCase.Insets(top: 59, bottom: 34, left: 0, right: 0)
+        )
+        defer { stage.window.isHidden = true }
+
+        let samples = await SwiftUIPlacementSampling.sample(
+            window: stage.window,
+            container: { stage.container.contentView },
+            drawn: [band, background]
+        )
+        let container = try #require(samples.first?.container)
+        #expect(abs(container.maxY - 852) <= 0.5, "器の下端は窓の下端 852 — 実測 \(container)")
+        SwiftUIPlacementSampling.expectContainer(samples, equals: container, "Loadingの器")
+        SwiftUIPlacementSampling.expectDrawn(samples, at: 0, equals: container, "Loadingの帯")
+        SwiftUIPlacementSampling.expectDrawn(samples, at: 1, equals: container, "Loadingの地色")
+    }
 }
 #endif

@@ -85,16 +85,21 @@ enum DialogLayoutMeasurement {
     }
 
     /// 内部表現 (SwiftUI のホストを伴う中身を含む) をそのまま器に載せて window へ出す。
+    /// `layoutDirection` を渡すと、器を載せる前から window をその書字方向にする。
     static func layoutInWindow(
         content: DialogContent,
         showPlacement: DialogPlacement? = nil,
         screen: DialogLayoutCase.Size,
         insets: DialogLayoutCase.Insets,
+        layoutDirection: UITraitEnvironmentLayoutDirection? = nil,
         resultChannel: DialogResultChannel = DialogResultChannel()
     ) -> (container: DialogContainerViewController, window: UIWindow) {
         let window = DialogLayoutTestWindow(
             frame: CGRect(x: 0, y: 0, width: screen.w, height: screen.h)
         )
+        if let layoutDirection {
+            window.traitOverrides.layoutDirection = layoutDirection
+        }
         window.simulatedSafeAreaInsets = UIEdgeInsets(
             top: insets.top,
             left: insets.left,

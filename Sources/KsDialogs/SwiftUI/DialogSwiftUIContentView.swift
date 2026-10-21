@@ -15,8 +15,12 @@ import UIKit
 /// SwiftUI 標準の安全領域として渡す。ホストは受け取った安全領域を自分の求めるサイズへ足すため、
 /// 器へ伝える要求サイズはそこから安全領域を引き戻した値にする。これで安全領域をいくつ受け取っても
 /// 器の大きさは変わらず、端に付けた中身が器の内側で安全領域を避けるだけになる。
+///
+/// 窓全体を基準に片側の端へ付けた軸で、中身が安全領域の内側に収まらない (縮みきれない) ときは、
+/// ホストのルートの包みで中身を内側の辺にそろえ、器いっぱいまで使って置かせる。
 @MainActor
-final class DialogSwiftUIContentView: UIView, DialogAttributeSupplyProbe, DialogContentSafeAreaRelay {
+final class DialogSwiftUIContentView: UIView, DialogAttributeSupplyProbe, DialogContentSafeAreaRelay,
+    DialogContentWidthLimitReceiver {
     private(set) var hasResolvedAttributeSupply = false
 
     /// 重なりをホストへ渡す軸。器が軸を指定するまでは、どちらの軸も渡さない。
@@ -27,6 +31,25 @@ final class DialogSwiftUIContentView: UIView, DialogAttributeSupplyProbe, Dialog
 
     /// ホストのルートで無視させる辺。渡さない軸の辺を持たせる。
     private var safeAreaEdges: DialogSwiftUISafeAreaEdges?
+
+    /// ホストのルートで、収まらない中身を内側の辺へそろえる軸。
+    private var overflowAlignment: DialogSwiftUIOverflowAlignment?
+
+    /// 窓全体を基準に片側の端へ付けた軸の、器が付いた側。器が指定するまではどちらの軸も nil。
+    private var anchoredHorizontalEdge: DialogAnchoredEdge?
+    private var anchoredVerticalEdge: DialogAnchoredEdge?
+
+    /// 最後にはみ出しを判定したときの入力。これが変わるまで判定を保つ。
+    private var overflowInputs: OverflowInputs?
+
+    /// 中身が置き直されたため、はみ出しを次のレイアウトパスで測り直すか。
+    private var needsOverflowRecheck = false
+
+    /// ルートの包みの変化をホストへ反映している最中か。
+    private var isApplyingOverflowAlignment = false
+
+    /// 器から最後に知らされた、幅を中身に委ねた軸の上限。
+    private var notifiedWidthLimit: CGFloat?
 
     /// ホストが求める大きさの変化を知らせる監視。
     private var preferredSizeObservation: NSKeyValueObservation?
@@ -98,6 +121,26 @@ final class DialogSwiftUIContentView: UIView, DialogAttributeSupplyProbe, Dialog
         setNeedsLayout()
     }
 
+    func anchorEdges(horizontal: DialogAnchoredEdge?, vertical: DialogAnchoredEdge?) {
+        guard horizontal != anchoredHorizontalEdge || vertical != anchoredVerticalEdge else { return }
+        anchoredHorizontalEdge = horizontal
+        anchoredVerticalEdge = vertical
+        setNeedsLayout()
+    }
+
+    /// 上限が前に知らされた値より広がったときだけ、覚えた幅を捨てて理想の幅から求め直す。
+    ///
+    /// 覚えた幅と上限を比べると、上限よりわずかに狭い幅で落ち着いた本文で、同じ上限が知らされる
+    /// たびに求め直しを繰り返してしまうため、比べる相手は前に知らされた上限にする。
+    func contentSizedWidthLimitDidChange(_ limit: CGFloat?) {
+        let previousLimit = notifiedWidthLimit
+        notifiedWidthLimit = limit
+        guard let limit, let previousLimit, limit > previousLimit + Self.sizeTolerance else { return }
+        proposedWidth = nil
+        invalidateIntrinsicContentSize()
+        setNeedsLayout()
+    }
+
     override func safeAreaInsetsDidChange() {
         super.safeAreaInsetsDidChange()
         invalidateIntrinsicContentSize()
@@ -126,6 +169,125 @@ final class DialogSwiftUIContentView: UIView, DialogAttributeSupplyProbe, Dialog
             // 器の矩形が変わらなかったときにも、伝え直した要求サイズに器が応えたかを次のパスで見る。
             setNeedsLayout()
         }
+        updateOverflowAlignment()
+    }
+
+    /// はみ出しの判定に使う入力。どれかが変わったときだけ判定し直す。
+    private struct OverflowInputs: Equatable {
+        let size: CGSize
+        let idealSize: CGSize?
+        let safeAreaInsets: UIEdgeInsets
+        let horizontal: DialogAnchoredEdge?
+        let vertical: DialogAnchoredEdge?
+    }
+
+    /// 片側の端に付けた軸ごとに、中身が安全領域の内側に収まるかを判定し、ルートの包みへ伝える。
+    ///
+    /// 包みが効いている間は、包みが中身を安全領域の内側の大きさに収めて見せるため、はみ出しを
+    /// 測れない。そこで判定は包みを外した状態で行い、器の大きさ・中身の理想の大きさ・中身が受け取る
+    /// 安全領域・付いた側のどれかが変わるまで保つ。判定は同じレイアウトパスの中で行い、
+    /// 包みを外した状態は描画されない。
+    ///
+    /// それらが変わらなくても、中身が置き直された (縮められる範囲が変わった) ときは、包みが
+    /// 効いている軸も含めて同じように包みを外して測り直す。縮められる範囲が戻って収まるように
+    /// なった軸では、ここで包みが外れる。
+    private func updateOverflowAlignment() {
+        let needsRecheck = needsOverflowRecheck
+        needsOverflowRecheck = false
+        guard let overflowAlignment, let hostedView = host?.view, bounds.width > 0, bounds.height > 0 else { return }
+        let inputs = OverflowInputs(
+            size: bounds.size,
+            idealSize: lastIdealSize,
+            safeAreaInsets: hostedView.safeAreaInsets,
+            horizontal: anchoredHorizontalEdge,
+            vertical: anchoredVerticalEdge
+        )
+        guard inputs != overflowInputs || needsRecheck else { return }
+        overflowInputs = inputs
+        applyOverflowAlignment(horizontal: nil, vertical: nil, to: overflowAlignment, hostedView: hostedView)
+        guard inputs.horizontal != nil || inputs.vertical != nil else { return }
+        let overflow = overflowingEdges(inputs)
+        applyOverflowAlignment(
+            horizontal: overflow.horizontal,
+            vertical: overflow.vertical,
+            to: overflowAlignment,
+            hostedView: hostedView
+        )
+    }
+
+    /// 中身に安全領域の内側の大きさを提案し、はみ出す軸ごとに付いた側を返す。
+    private func overflowingEdges(_ inputs: OverflowInputs) -> (horizontal: DialogAnchoredEdge?, vertical: DialogAnchoredEdge?) {
+        let available = availableSize(insets: inputs.safeAreaInsets)
+        let measured = fittingSize(in: available, insets: inputs.safeAreaInsets)
+        return (
+            horizontal: measured.width > available.width + Self.sizeTolerance ? inputs.horizontal : nil,
+            vertical: measured.height > available.height + Self.sizeTolerance ? inputs.vertical : nil
+        )
+    }
+
+    /// 包みの指定が今と違うときだけ書き換え、このレイアウトパスの中でホストへ反映させる。
+    ///
+    /// 同じ値の書き込みでもホストのルートは評価し直されるため、変わらないときは書かない。
+    /// 反映の間に中身が置き直された知らせは、包み自身の変化によるものなので受け取らない。
+    private func applyOverflowAlignment(
+        horizontal: DialogAnchoredEdge?,
+        vertical: DialogAnchoredEdge?,
+        to overflowAlignment: DialogSwiftUIOverflowAlignment,
+        hostedView: UIView
+    ) {
+        guard overflowAlignment.horizontal != horizontal || overflowAlignment.vertical != vertical else { return }
+        if overflowAlignment.horizontal != horizontal {
+            overflowAlignment.horizontal = horizontal
+        }
+        if overflowAlignment.vertical != vertical {
+            overflowAlignment.vertical = vertical
+        }
+        isApplyingOverflowAlignment = true
+        Self.flushLayout(of: hostedView)
+        isApplyingOverflowAlignment = false
+    }
+
+    /// 中身が置かれた大きさが変わったときに呼ばれる。
+    ///
+    /// 片側の端に付けた軸があれば、包みが効いているかによらず、次のレイアウトパスでその軸の
+    /// はみ出しを包みを外して測り直す。包み自身の変化で中身が置き直された知らせは受け取らない。
+    func hostedContentDidResize() {
+        guard !isApplyingOverflowAlignment, overflowAlignment != nil else { return }
+        guard anchoredHorizontalEdge != nil || anchoredVerticalEdge != nil else { return }
+        needsOverflowRecheck = true
+        setNeedsLayout()
+    }
+
+    /// ルートの包みの変化を、このレイアウトパスの中でホストへ反映させる。
+    /// 反映を次の更新まで待つと、包みを外した状態で測れず、外した状態が 1 度描かれてしまう。
+    private static func flushLayout(of hostedView: UIView) {
+        hostedView.setNeedsLayout()
+        hostedView.layoutIfNeeded()
+    }
+
+    /// 中身が実際に提案される大きさ。重なりを渡す軸では、器から安全領域を除いた大きさになる。
+    private func availableSize(insets: UIEdgeInsets) -> CGSize {
+        CGSize(
+            width: max(0, bounds.width - (relaysHorizontalSafeArea ? insets.left + insets.right : 0)),
+            height: max(0, bounds.height - (relaysVerticalSafeArea ? insets.top + insets.bottom : 0))
+        )
+    }
+
+    /// 中身に `size` を提案したときに中身が求める大きさ。
+    ///
+    /// ホストは提案から自分の safe area を引いて中身へ渡し、答えにその分を足して返すので、
+    /// 提案には safe area を足して渡し、答えから引く。
+    private func fittingSize(in size: CGSize, insets: UIEdgeInsets) -> CGSize {
+        guard let hostedView = host?.view else { return .zero }
+        let horizontalInsets = insets.left + insets.right
+        let verticalInsets = insets.top + insets.bottom
+        let fitting = hostedView.sizeThatFits(
+            CGSize(width: size.width + horizontalInsets, height: size.height + verticalInsets)
+        )
+        return CGSize(
+            width: max(0, fitting.width - horizontalInsets),
+            height: max(0, fitting.height - verticalInsets)
+        )
     }
 
     /// 大きさを同じと見なすときの許容誤差 (画素の丸めと、安全領域を引く計算の誤差の分)。
@@ -154,9 +316,14 @@ final class DialogSwiftUIContentView: UIView, DialogAttributeSupplyProbe, Dialog
     ///
     /// ホストが求める大きさの変化 (中身の文言や状態の変化) は、ホストの `preferredContentSize` の
     /// 更新で知り、理想の幅から要求サイズを求め直す。
-    func embed(_ host: UIViewController, safeAreaEdges: DialogSwiftUISafeAreaEdges) {
+    func embed(
+        _ host: UIViewController,
+        safeAreaEdges: DialogSwiftUISafeAreaEdges,
+        overflowAlignment: DialogSwiftUIOverflowAlignment
+    ) {
         self.host = host
         self.safeAreaEdges = safeAreaEdges
+        self.overflowAlignment = overflowAlignment
         let hostedView: UIView = host.view
         // ホスト自身の内容サイズ (安全領域を足した大きさ) が器の大きさを押し広げないよう、
         // 器の大きさはこの View の内容サイズだけで決める。

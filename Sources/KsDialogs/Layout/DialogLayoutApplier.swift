@@ -262,10 +262,12 @@ final class DialogLayoutApplier {
         }
     }
 
-    /// 安全領域を受け取れる中身へ、重なりを渡す軸を伝える。
+    /// 安全領域を受け取れる中身へ、重なりを渡す軸と、片側の端に付けた軸の付いた側を伝える。
     ///
     /// 渡すのは基準領域が窓全体で、位置が端に固定される軸だけにする。窓全体以外の基準領域では
     /// 器がすでにシステムの領域を避けて置かれているため、移動量で重なっても渡さない。
+    /// 付いた側を伝えるのは、そのうち片側の端 (start / end。比率サイズの有無は問わない) の軸だけで、
+    /// fill で両側の端に付いた軸には伝えない。
     /// 位置の固定のしかたは配置・比率サイズだけで決まり、ウィンドウの寸法では変わらないので、
     /// 制約を張り直すときに決めれば足りる。
     private func relaySafeArea(
@@ -276,6 +278,10 @@ final class DialogLayoutApplier {
         relay.relaySafeArea(
             horizontal: Self.relaysSafeArea(along: solution.horizontal.position, layoutArea: layout.layoutArea),
             vertical: Self.relaysSafeArea(along: solution.vertical.position, layoutArea: layout.layoutArea)
+        )
+        relay.anchorEdges(
+            horizontal: Self.anchoredEdge(of: solution.horizontal, layoutArea: layout.layoutArea),
+            vertical: Self.anchoredEdge(of: solution.vertical, layoutArea: layout.layoutArea)
         )
     }
 
@@ -289,6 +295,19 @@ final class DialogLayoutApplier {
             return true
         case .center:
             return false
+        }
+    }
+
+    /// 窓全体を基準に片側の端へ付けた軸なら、付いた側を返す。それ以外の軸は nil。
+    private static func anchoredEdge(of axis: DialogAxisLayout, layoutArea: DialogLayoutArea) -> DialogAnchoredEdge? {
+        guard layoutArea == .window, !axis.isFilled else { return nil }
+        switch axis.position {
+        case .leadingEdge:
+            return .leadingEdge
+        case .trailingEdge:
+            return .trailingEdge
+        case .center:
+            return nil
         }
     }
 
@@ -310,6 +329,9 @@ final class DialogLayoutApplier {
         contentHeightConstraint?.constant = solution.vertical.size ?? 0
         contentMaxHeightConstraint?.constant = solution.vertical.maxSize
         contentVerticalPositionConstraint?.constant = solution.vertical.position.constant
+        (contentView as? any DialogContentWidthLimitReceiver)?.contentSizedWidthLimitDidChange(
+            solution.horizontal.size == nil ? solution.horizontal.maxSize : nil
+        )
     }
 }
 #endif

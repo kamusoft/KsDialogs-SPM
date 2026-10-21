@@ -10,5 +10,12 @@
 protocol DialogContentSafeAreaRelay: AnyObject {
     /// 重なりを中身へ渡す軸を指定する。渡さない軸の辺は、中身から見て安全領域 0 になる。
     func relaySafeArea(horizontal: Bool, vertical: Bool)
+
+    /// 窓全体を基準に片側の端へ付けた軸と、その軸で器が付いた側を指定する。
+    ///
+    /// 指定した軸で中身が安全領域の内側に収まらないときは、中身を付いた側と反対の辺 (内側の辺) に
+    /// そろえ、器いっぱいまで使って置く。nil の軸 (両側の端・中央の軸、窓全体以外の基準領域) では
+    /// 並び方を変えない。
+    func anchorEdges(horizontal: DialogAnchoredEdge?, vertical: DialogAnchoredEdge?)
 }
 #endif

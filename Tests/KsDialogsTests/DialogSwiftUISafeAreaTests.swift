@@ -9,7 +9,7 @@ import UIKit
 ///
 /// 基準領域が窓全体のときだけ、位置が端に固定される軸の重なりを中身が標準の安全領域として受け取る。
 /// 中央に固定される軸と、窓全体以外の基準領域では受け取らない。どの場合も器の大きさと位置は
-/// 安全領域を受け取らないときと同じである。
+/// 安全領域を受け取らないときと同じである。中身の位置は、中身に重ねた UIView の目印で描かれた位置を測る。
 @Suite("SwiftUI の中身の安全領域 (Dialog)", .serialized)
 @MainActor
 struct DialogSwiftUISafeAreaTests {
@@ -122,18 +122,17 @@ struct DialogSwiftUISafeAreaTests {
     )
     func PB_IS_10_edgeContainerKeepsRequestedSize(isTop: Bool, container: CGRect, content: CGRect) async throws {
         let edge = isTop ? "上端" : "下端"
-        let record = SwiftUISafeAreaRecord()
-        let stage = try await Self.show(record: record, placement: isTop ? Self.top : Self.bottom)
+        let drawn = SwiftUIDrawnFrameProbe()
+        let stage = try await Self.show(record: SwiftUISafeAreaRecord(), placement: isTop ? Self.top : Self.bottom, drawn: drawn)
         defer { stage.window.isHidden = true }
 
-        let frames = await Self.sampleContainerFrames(stage)
-        for frame in frames {
-            DialogRectExpectation.expect(frame, equals: container, "\(edge)の器")
+        let settled = await SwiftUIPlacementSampling.waitUntilDrawn(window: stage.window, drawn) {
+            SwiftUIPlacementSampling.isClose($0, content)
         }
-        let settled = await DialogTestWaiting.waitUntil(timeout: .seconds(2)) {
-            record.latestFrame.map { Self.isClose($0, content) } ?? false
-        }
-        #expect(settled, "\(edge)の中身は器の内側の安全領域に収まる — 期待 \(content) 実測 \(String(describing: record.latestFrame))")
+        #expect(settled, "\(edge)の中身は器の内側の安全領域に収まる — 期待 \(content) 実測 \(String(describing: drawn.windowFrame))")
+        let samples = await Self.sample(stage, drawn: [drawn])
+        SwiftUIPlacementSampling.expectContainer(samples, equals: container, "\(edge)の器")
+        SwiftUIPlacementSampling.expectDrawn(samples, equals: content, "\(edge)の中身")
     }
 
     @Test(
@@ -161,7 +160,7 @@ struct DialogSwiftUISafeAreaTests {
     }
 
     @Test(
-        "[PB-IS-12] 安全領域に収まらない固定サイズの中身でも、器の矩形は変わらない",
+        "[PB-IS-12] 安全領域に収まらない固定サイズの中身は、器の矩形いっぱいに置かれる",
         arguments: [
             (isTop: true, ignores: false),
             (isTop: true, ignores: true),
@@ -169,21 +168,22 @@ struct DialogSwiftUISafeAreaTests {
             (isTop: false, ignores: true)
         ]
     )
-    func PB_IS_12_fixedSizeContentKeepsContainer(isTop: Bool, ignores: Bool) async throws {
+    func PB_IS_12_fixedSizeContentFillsContainer(isTop: Bool, ignores: Bool) async throws {
         let note = "\(isTop ? "上端" : "下端")・\(ignores ? "無視あり" : "無視なし")"
         let expected = CGRect(x: 96.5, y: isTop ? 0 : 752, width: 200, height: 100)
-        let record = SwiftUISafeAreaRecord()
+        let drawn = SwiftUIDrawnFrameProbe()
         let stage = try await Self.show(
-            record: record,
+            record: SwiftUISafeAreaRecord(),
+            model: SwiftUISafeAreaProbeModel(isFixedSize: true),
             placement: isTop ? Self.top : Self.bottom,
-            isFixedSize: true,
-            ignoresSafeArea: ignores
+            ignoresSafeArea: ignores,
+            drawn: drawn
         )
         defer { stage.window.isHidden = true }
 
-        for frame in await Self.sampleContainerFrames(stage) {
-            DialogRectExpectation.expect(frame, equals: expected, note)
-        }
+        let samples = await Self.sample(stage, drawn: [drawn])
+        SwiftUIPlacementSampling.expectContainer(samples, equals: expected, "\(note)の器")
+        SwiftUIPlacementSampling.expectDrawn(samples, equals: expected, "\(note)の中身")
     }
 
     @Test("[PB-IS-13] 中央に置いた中身は膨らまない")
@@ -220,22 +220,22 @@ struct DialogSwiftUISafeAreaTests {
         await record.expectLatestInsets(top: 59, "変えた後")
     }
 
-    @Test("[PB-IS-15] 横の安全領域で折り返す本文でも、器の矩形は落ち着く")
-    func PB_IS_15_wrappingTextSettles() async throws {
-        // 比べる基準: 同じ本文を、一番外側で安全領域を無視して (安全領域を受け取らずに) 出した器の矩形。
-        let referenceStage = try await Self.showWrappingText(record: SwiftUISafeAreaRecord(), ignoresSafeArea: true)
-        let reference = await Self.sampleContainerFrames(referenceStage)
-        referenceStage.window.isHidden = true
-        let expected = try #require(reference.last)
-
+    @Test("[PB-IS-15] 横の安全領域で折り返す本文は、窓の幅まで広がって落ち着く")
+    func PB_IS_15_wrappingTextWidensToWindowAndSettles() async throws {
         let record = SwiftUISafeAreaRecord()
         let stage = try await Self.showWrappingText(record: record, ignoresSafeArea: false)
         defer { stage.window.isHidden = true }
 
+        let widened = await DialogTestWaiting.waitUntil(timeout: .seconds(2)) {
+            stage.window.layoutIfNeeded()
+            return abs(stage.container.contentView.frame.width - 852) <= 1.0
+        }
+        #expect(widened, "器の幅は窓の幅 852 で頭打ちになる — 実測 \(stage.container.contentView.frame)")
         let frames = await Self.sampleContainerFrames(stage)
-        #expect(frames.allSatisfy { Self.isClose($0, expected) }, "1 秒間、安全領域を受け取らないときと同じ矩形 \(expected) — 実測 \(frames)")
-        #expect(expected.width <= 852 + 0.5, "幅は窓の幅を超えない — 基準 \(expected)")
-        await record.expectLatestInsets(leading: 59, trailing: 0, "左端")
+        let first = try #require(frames.first)
+        #expect(frames.allSatisfy { Self.isClose($0, first) }, "1 秒間、器の矩形が変わらない — 実測 \(frames)")
+        #expect(abs(first.width - 852) <= 1.0, "幅は 852 — 実測 \(first)")
+        await record.expectLatestInsets(leading: 59, trailing: 59, "左端・窓いっぱい")
     }
 
     @Test("[PB-IS-16] UIView の中身は、今と同じく重なりを safe area として受け取る")
@@ -303,17 +303,17 @@ struct DialogSwiftUISafeAreaTests {
         record: SwiftUISafeAreaRecord,
         model: SwiftUISafeAreaProbeModel = SwiftUISafeAreaProbeModel(),
         placement: DialogPlacement? = nil,
-        isFixedSize: Bool = false,
         ignoresSafeArea: Bool = false,
-        options: DialogOptions = DialogOptions(layoutArea: .window)
+        options: DialogOptions = DialogOptions(layoutArea: .window),
+        drawn: SwiftUIDrawnFrameProbe? = nil
     ) async throws -> (container: DialogContainerViewController, window: UIWindow) {
         try await DialogSwiftUIMeasurement.layoutInWindow(
             content: SafeAreaProbeSwiftUIContent(
                 model: model,
                 record: record,
-                isFixedSize: isFixedSize,
                 ignoresSafeArea: ignoresSafeArea,
-                options: options
+                options: options,
+                drawn: drawn
             ),
             showPlacement: placement,
             screen: portrait,
@@ -331,6 +331,18 @@ struct DialogSwiftUISafeAreaTests {
             showPlacement: DialogPlacement(horizontalAlignment: .start),
             screen: landscape,
             insets: landscapeInsets
+        )
+    }
+
+    /// 今から 1 秒間、器の矩形と目印の矩形を測る。
+    private static func sample(
+        _ stage: (container: DialogContainerViewController, window: UIWindow),
+        drawn: [SwiftUIDrawnFrameProbe]
+    ) async -> [SwiftUIPlacementSample] {
+        await SwiftUIPlacementSampling.sample(
+            window: stage.window,
+            container: { stage.container.contentView },
+            drawn: drawn
         )
     }
 

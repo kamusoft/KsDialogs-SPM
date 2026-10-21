@@ -13,12 +13,14 @@ import UIKit
 enum DialogSwiftUIMeasurement {
     /// 実効値の固定まで進んだ器と window。呼び出し側が使い終わるまで保持して自分で隠す。
     /// `pageArea` を渡すと、その矩形を表示中のページとして持つ window の上へ器を重ねる。
+    /// `layoutDirection` を渡すと、器を載せる前から window をその書字方向にする (`pageArea` を渡さないときだけ)。
     static func layoutInWindow<Content: View>(
         content: Content,
         showPlacement: DialogPlacement? = nil,
         screen: DialogLayoutCase.Size,
         insets: DialogLayoutCase.Insets,
         pageArea: DialogLayoutCase.Rect? = nil,
+        layoutDirection: UITraitEnvironmentLayoutDirection? = nil,
         resultChannel: DialogResultChannel = DialogResultChannel()
     ) async throws -> (container: DialogContainerViewController, window: UIWindow) {
         let stage = if let pageArea {
@@ -36,6 +38,7 @@ enum DialogSwiftUIMeasurement {
                 showPlacement: showPlacement,
                 screen: screen,
                 insets: insets,
+                layoutDirection: layoutDirection,
                 resultChannel: resultChannel
             )
         }
